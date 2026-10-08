@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
       - name: Prepare sources (unzip if the tree was uploaded as a zip)
         run: |
           if [ ! -d "android" ]; then
