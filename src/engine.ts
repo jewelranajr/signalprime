@@ -143,7 +143,6 @@ export function scoreAll(
   market: MarketContext,
 ): ScoreBreakdown {
   void symbol;
-  void regime;
   void market;
 
   const components: ScoreComponent[] = [];
@@ -366,39 +365,77 @@ export function scoreAll(
     return { long: clamp(long, 0, 10), short: clamp(short, 0, 10), evL, evS };
   }
 
-  // ---- 5. VWAP (10): price vs VWAP within a reasonable band ----
+  // ---- 5. VWAP (10): regime-aware bands ----
+  // In strong trends, price above/below VWAP is trend CONFIRMATION (wider bands).
+  // In sideways/choppy regimes, tight mean-reversion bands apply.
+  // (Previous version used tight bands always, systematically penalizing strong trends.)
   function vwapC(): ComponentResult {
     const evL: string[] = [];
     const evS: string[] = [];
     let long = 0;
     let short = 0;
+    const bullRegime =
+      regime === 'STRONG_BULL' || regime === 'BREAKOUT' || regime === 'WEAK_BULL';
+    const bearRegime =
+      regime === 'STRONG_BEAR' || regime === 'BREAKDOWN' || regime === 'WEAK_BEAR';
     if (Number.isFinite(vwap) && close > 0) {
       const d = (close - vwap) / close;
-      if (d > 0 && d <= 0.005) {
-        long = 10;
-        evL.push(`Price ${(d * 100).toFixed(2)}% above VWAP (healthy band)`);
-      } else if (d > 0.005 && d <= 0.015) long = 6;
-      else if (d > 0.015 && d <= 0.03) long = 3;
-      else if (d > 0.03) long = 1; // overextended chase
-      if (d < 0 && d >= -0.005) {
-        short = 10;
-        evS.push(
-          `Price ${(Math.abs(d) * 100).toFixed(2)}% below VWAP (healthy band)`,
-        );
-      } else if (d < -0.005 && d >= -0.015) short = 6;
-      else if (d < -0.015 && d >= -0.03) short = 3;
-      else if (d < -0.03) short = 1;
+      if (d > 0) {
+        if (bullRegime) {
+          if (d <= 0.02) {
+            long = 10;
+            evL.push(`Price ${(d * 100).toFixed(2)}% above VWAP (healthy trend band)`);
+          } else if (d <= 0.04) long = 8;
+          else if (d <= 0.06) long = 5;
+          else long = 2; // overextended even for a trend
+        } else {
+          if (d <= 0.005) {
+            long = 10;
+            evL.push(`Price ${(d * 100).toFixed(2)}% above VWAP (healthy band)`);
+          } else if (d <= 0.015) long = 6;
+          else if (d <= 0.03) long = 3;
+          else long = 1; // overextended chase
+        }
+      }
+      if (d < 0) {
+        if (bearRegime) {
+          if (d >= -0.02) {
+            short = 10;
+            evS.push(
+              `Price ${(Math.abs(d) * 100).toFixed(2)}% below VWAP (healthy trend band)`,
+            );
+          } else if (d >= -0.04) short = 8;
+          else if (d >= -0.06) short = 5;
+          else short = 2;
+        } else {
+          if (d >= -0.005) {
+            short = 10;
+            evS.push(
+              `Price ${(Math.abs(d) * 100).toFixed(2)}% below VWAP (healthy band)`,
+            );
+          } else if (d >= -0.015) short = 6;
+          else if (d >= -0.03) short = 3;
+          else short = 1;
+        }
+      }
     }
     return { long, short, evL, evS };
   }
 
-  // ---- 6. S/R (10): clear of opposing level; near same-side level ----
+  // ---- 6. S/R (10): regime-aware ----
+  // In strong trends/breakouts, price far from the same-side level is NORMAL
+  // (it just broke out) — don't penalize it. The opposing-level clearance
+  // carries the weight; same-side level is a backstop, not a bounce requirement.
   function sr(): ComponentResult {
     const evL: string[] = [];
     const evS: string[] = [];
     let long = 0;
     let short = 0;
     const a = Number.isFinite(atrPct) && atrPct > 0 ? atrPct : NaN;
+    const bullRegime =
+      regime === 'STRONG_BULL' || regime === 'BREAKOUT' || regime === 'WEAK_BULL';
+    const bearRegime =
+      regime === 'STRONG_BEAR' || regime === 'BREAKDOWN' || regime === 'WEAK_BEAR';
     // LONG: no immediate overhead resistance (6) + near support bounce (4)
     if (!Number.isFinite(res) || res <= close) {
       long += 6;
@@ -417,6 +454,11 @@ export function scoreAll(
         long += 4;
         evL.push('Price near support: bounce zone');
       } else if (d2 <= 1.5 * a) long += 2;
+      else if (bullRegime) {
+        // Breakout context: support exists below as backstop, not a bounce zone.
+        long += 2;
+        evL.push('Support below as backstop (breakout context)');
+      }
     }
     // SHORT: no immediate support below (6) + near resistance rejection (4)
     if (!Number.isFinite(sup) || sup >= close) {
@@ -436,6 +478,11 @@ export function scoreAll(
         short += 4;
         evS.push('Price near resistance: rejection zone');
       } else if (d2 <= 1.5 * a) short += 2;
+      else if (bearRegime) {
+        // Breakdown context: resistance exists above as backstop.
+        short += 2;
+        evS.push('Resistance above as backstop (breakdown context)');
+      }
     }
     return { long: clamp(long, 0, 10), short: clamp(short, 0, 10), evL, evS };
   }
