@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "@fastify/rate-limit": "^10.1.1",
+    "fastify": "^5.3.0"
+  },
+  "description": "CryptoAI Pro \u2014 Master Signal Engine: high-probability LONG/SHORT crypto signals with strict NO_TRADE protection and controlled risk (Binance market data, Fastify API)",
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "main": "dist/index.js",
+  "name": "cryptoai-pro",
+  "private": true,
+  "scripts": {
+    "backtest": "npm run build && node dist/scripts/backtest-run.js",
+    "paper": "npm run build && node dist/scripts/paper-run.js",
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "sample": "npm run build && node dist/scripts/sample.js",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test \"dist/tests/*.test.js\""
+  },
+  "type": "commonjs",
+  "version": "1.0.0"
+}
