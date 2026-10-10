@@ -170,6 +170,21 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         sigCard.addView(winRateText)
+        // Separate win rates for NORMAL vs GOOD
+        winRateNormalText = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+        }
+        sigCard.addView(winRateNormalText)
+        winRateGoodText = TextView(this).apply {
+            text = ""
+            textSize = 12f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+        }
+        sigCard.addView(winRateGoodText)
         sigCard.addView(spacer(8))
         val sigRefresh = styledButton("↻  REFRESH SIGNALS", outlined = true)
         sigCard.addView(sigRefresh)
@@ -217,6 +232,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modeStrictBtn: Button
     private lateinit var modeNormalBtn: Button
     private lateinit var winRateText: TextView
+    private lateinit var winRateNormalText: TextView
+    private lateinit var winRateGoodText: TextView
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -616,18 +633,22 @@ class MainActivity : AppCompatActivity() {
                     paperBox.addView(pnlRow)
                     paperBox.addView(spacer(8))
 
-                    // Win rate from trade history
+                    // Win rate from trade history — separate for NORMAL vs GOOD
                     val history = acc.optJSONArray("tradeHistory")
-                    var wins = 0
-                    var total = 0
+                    var wins = 0; var total = 0
+                    var normalWins = 0; var normalTotal = 0
+                    var goodWins = 0; var goodTotal = 0
                     if (history != null) {
                         for (i in 0 until history.length()) {
                             val t = history.getJSONObject(i)
+                            if (!t.has("pnl")) continue
                             val pnlT = t.optDouble("pnl", 0.0)
-                            // Only count closed trades with valid pnl
-                            if (t.has("pnl")) {
-                                total++
-                                if (pnlT > 0) wins++
+                            val grade = t.optString("grade", "")
+                            total++; if (pnlT > 0) wins++
+                            if (grade == "NORMAL") {
+                                normalTotal++; if (pnlT > 0) normalWins++
+                            } else if (grade == "A+" || grade == "A") {
+                                goodTotal++; if (pnlT > 0) goodWins++
                             }
                         }
                     }
@@ -639,6 +660,23 @@ class MainActivity : AppCompatActivity() {
                     }
                     winRateText.text = "Win rate: $winRateStr"
                     winRateText.setTextColor(Color.parseColor(if (total > 0) WHITE else MUTED))
+                    // Separate rates
+                    if (normalTotal > 0) {
+                        val pct = (normalWins * 100.0 / normalTotal).toInt()
+                        winRateNormalText.text = "Normal (65-80): $pct% ($normalWins/$normalTotal)"
+                        winRateNormalText.setTextColor(Color.parseColor(WHITE))
+                    } else {
+                        winRateNormalText.text = "Normal (65-80): —"
+                        winRateNormalText.setTextColor(Color.parseColor(MUTED))
+                    }
+                    if (goodTotal > 0) {
+                        val pct = (goodWins * 100.0 / goodTotal).toInt()
+                        winRateGoodText.text = "Good (85+): $pct% ($goodWins/$goodTotal)"
+                        winRateGoodText.setTextColor(Color.parseColor(WHITE))
+                    } else {
+                        winRateGoodText.text = "Good (85+): —"
+                        winRateGoodText.setTextColor(Color.parseColor(MUTED))
+                    }
 
                     val positions = acc.optJSONArray("openPositions")
                     if (positions == null || positions.length() == 0) {

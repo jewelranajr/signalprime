@@ -418,6 +418,10 @@ export function gradeSignal(
   config: EngineConfig,
 ): SignalGrade {
   const score = Math.max(longScore, shortScore);
+  // NORMAL tier: 65-80 scores get NORMAL grade (tracked separately)
+  if (score >= config.normalMinScore && score <= config.normalMaxScore) {
+    return 'NORMAL';
+  }
   if (!(score >= config.minScore)) return 'NO_TRADE';
 
   const aPlus =

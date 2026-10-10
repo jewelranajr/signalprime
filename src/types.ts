@@ -40,7 +40,7 @@ export interface Candle {
 // ---------------------------------------------------------------------------
 
 export type Direction = 'LONG' | 'SHORT' | 'NO_TRADE';
-export type SignalGrade = 'A+' | 'A' | 'B' | 'NO_TRADE';
+export type SignalGrade = 'A+' | 'A' | 'B' | 'NORMAL' | 'NO_TRADE';
 export type SignalStatus = 'ACTIVE' | 'WAITING' | 'EXPIRED' | 'INVALIDATED';
 export type EntryType = 'LIMIT' | 'MARKET' | 'BREAKOUT' | 'RETEST' | 'WAIT_FOR_RETEST';
 export type AIRating = 'AI_BULLISH' | 'AI_BEARISH' | 'AI_NEUTRAL';
@@ -233,6 +233,9 @@ export interface EngineConfig {
   aPlusScore: number;
   aPlusConfidence: number;
   aPlusRR: number;
+  // NORMAL tier (65-80)
+  normalMinScore: number;
+  normalMaxScore: number;
   // Risk
   accountBalance: number;
   riskPercent: number;

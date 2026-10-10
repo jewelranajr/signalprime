@@ -36,6 +36,9 @@ export function loadConfig(): EngineConfig {
     aPlusScore: num('A_PLUS_SCORE', 92),
     aPlusConfidence: num('A_PLUS_CONFIDENCE', 88),
     aPlusRR: num('A_PLUS_RR', 2.5),
+    // NORMAL tier (65-80): lower-quality signals, tracked separately
+    normalMinScore: num('NORMAL_MIN_SCORE', 65),
+    normalMaxScore: num('NORMAL_MAX_SCORE', 80),
     // Risk
     accountBalance: num('ACCOUNT_BALANCE', 10_000),
     riskPercent: num('RISK_PERCENT', 1),
