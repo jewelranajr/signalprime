@@ -448,6 +448,24 @@ class MainActivity : AppCompatActivity() {
         setLineSpacing(dp(4).toFloat(), 1f)
     }
 
+    // Signal age: "3m ago", "1h 5m ago", etc.
+    private fun signalAge(createdAt: String): String {
+        return try {
+            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            val clean = createdAt.substringBefore(".").substringBefore("+")
+            val date = fmt.parse(clean) ?: return ""
+            val diffMs = System.currentTimeMillis() - date.time
+            if (diffMs < 0) return "now"
+            val mins = diffMs / 60000
+            when {
+                mins < 1 -> "now"
+                mins < 60 -> "${mins}m ago"
+                else -> "${mins / 60}h ${mins % 60}m ago"
+            }
+        } catch (_: Exception) { "" }
+    }
+
     private fun signalRow(s: JSONObject, bestScore: Int = 0): View {
         val longScore = s.optDouble("long_score", 0.0).toInt()
         val shortScore = s.optDouble("short_score", 0.0).toInt()
@@ -472,6 +490,13 @@ class MainActivity : AppCompatActivity() {
         }
         top.addView(sym)
         top.addView(badge(dir, dirColor))
+        // Age timer in corner
+        val age = signalAge(s.optString("created_at", ""))
+        if (age.isNotEmpty()) {
+            val ageView = line("◷ $age", "#5b6577", 11f)
+            ageView.setPadding(dp(8), 0, 0, 0)
+            top.addView(ageView)
+        }
         card.addView(top)
         card.addView(spacer(6))
         val grade = s.optString("signal_grade")
