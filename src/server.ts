@@ -285,6 +285,11 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   // ---------------------------------------------------------------- bulk scan
+  // Signal cache: fresh scans are slow on Render free tier (~15s per 5 symbols).
+  // Cache for 5 minutes — the paper runner rescans every 15 min anyway.
+  let signalsCache: { ts: number; limit: number; result: unknown } | null = null;
+  const SIGNALS_CACHE_MS = 5 * 60 * 1000;
+
   app.get('/api/signals', async (req, reply) => {
     const q = (req.query as { limit?: string }).limit;
     let limit = 20;
@@ -295,6 +300,10 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
         return { error: 'Invalid limit. Must be an integer between 1 and 50.' };
       }
       limit = n;
+    }
+    // Serve from cache if fresh
+    if (signalsCache && signalsCache.limit === limit && Date.now() - signalsCache.ts < SIGNALS_CACHE_MS) {
+      return signalsCache.result;
     }
     try {
       const symbols = await deps.client.getTopUsdtSymbols(limit);
@@ -308,7 +317,9 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
         }
       });
       signals.sort(compareSignals);
-      return { count: signals.length, signals };
+      const result = { count: signals.length, signals };
+      signalsCache = { ts: Date.now(), limit, result };
+      return result;
     } catch (err) {
       return { count: 0, signals: [], error: `Internal error: ${safeMessage(err)}` };
     }
