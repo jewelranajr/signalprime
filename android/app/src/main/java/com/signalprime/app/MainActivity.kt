@@ -55,6 +55,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Press feedback: darker when pressed
+    private fun roundedPressed(color: String, radiusDp: Int = 14, border: String? = null): android.graphics.drawable.StateListDrawable {
+        val normal = rounded(color, radiusDp, border)
+        val pressedColor = try {
+            val c = Color.parseColor(color)
+            val factor = 0.7f
+            Color.rgb((Color.red(c) * factor).toInt(), (Color.green(c) * factor).toInt(), (Color.blue(c) * factor).toInt())
+        } catch (_: Exception) { Color.parseColor("#1a2332") }
+        val pressed = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(pressedColor)
+            if (border != null) setStroke(dp(1), Color.parseColor(border))
+        }
+        return android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pressed)
+            addState(intArrayOf(), normal)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -256,11 +276,13 @@ class MainActivity : AppCompatActivity() {
             setTypeface(typeface, Typeface.BOLD)
             letterSpacing = 0.06f
             setTextColor(if (outlined) Color.parseColor(ACCENT) else Color.WHITE)
-            background = if (outlined) rounded("#0e1420", 10, ACCENT)
-                         else rounded(ACCENT, 10)
+            background = if (outlined) roundedPressed("#0e1420", 10, ACCENT)
+                         else roundedPressed(ACCENT, 10)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             isAllCaps = false
             stateListAnimator = null
+            isClickable = true
+            isFocusable = true
         }
     }
 
@@ -531,6 +553,12 @@ class MainActivity : AppCompatActivity() {
             card.addView(line("Regime: $regime", "#5b6577", 12f))
         }
         card.isClickable = true
+        card.isFocusable = true
+        // Press feedback on signal cards
+        card.foreground = android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(Color.parseColor("#40ffffff")),
+            null, null
+        )
         card.setOnClickListener { showSignalDetail(s, dir, score) }
         return card
     }
