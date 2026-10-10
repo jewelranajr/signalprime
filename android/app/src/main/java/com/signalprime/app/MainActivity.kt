@@ -590,7 +590,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSignalDetail(s: JSONObject, displayDir: String = "", displayScore: Int = 0) {
         val rawDir = s.optString("direction")
-        // Use display values from signal row (handles NORMAL mode inference)
         val dir = if (displayDir.isNotEmpty()) displayDir else rawDir
         val longScore = s.optDouble("long_score", 0.0).toInt()
         val shortScore = s.optDouble("short_score", 0.0).toInt()
@@ -598,49 +597,110 @@ class MainActivity : AppCompatActivity() {
         val canOrder = (rawDir == "LONG" || rawDir == "SHORT") &&
             s.optString("status") == "ACTIVE" &&
             (s.optString("signal_grade") == "A+" || s.optString("signal_grade") == "A")
+        val isLong = dir.contains("LONG")
+        val dirColor = if (isLong) GREEN else RED
+        val (strengthText, strengthColor) = getSignalStrength(score)
+        val grade = s.optString("signal_grade")
+        val conf = s.optInt("confidence")
+        val regime = s.optString("market_regime")
+        val symbol = s.optString("symbol")
 
-        val (strengthText, _) = getSignalStrength(score)
-        val msg = buildString {
-            appendLine("Symbol: ${s.optString("symbol")}")
-            appendLine("Direction: $dir")
-            appendLine("Grade: ${s.optString("signal_grade")}")
-            appendLine("Score: $score   Confidence: ${s.optInt("confidence")}%")
-            appendLine("Strength: $strengthText")
-            appendLine("Regime: ${s.optString("market_regime")}")
-            val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN)
-            if (entry != null && !entry.isNaN() && !entry.isInfinite()) {
-                appendLine("Entry price: ${fmt(entry)}")
-                val qty = s.optJSONObject("position")?.optDouble("quantity", Double.NaN)
-                if (qty != null && !qty.isNaN() && !qty.isInfinite() && qty > 0) {
-                    val posLabel = if (dir.contains("SHORT")) "Sell qty" else "Buy qty"
-                    appendLine("$posLabel: ${fmt(qty)}")
-                }
-            } else {
-                appendLine("Entry price: Market price")
-            }
-            val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN)
-            if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop loss: ${fmt(sl)}")
-            else appendLine("Stop loss: 2% from market")
-            val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN)
-            if (tp != null && !tp.isNaN() && !tp.isInfinite()) appendLine("Target: ${fmt(tp)}")
-            if (signalMode == "NORMAL" && rawDir == "NO_TRADE") {
-                appendLine("\nNote: NORMAL mode shows potential direction.")
-                appendLine("Engine did not confirm — trade manually with care.")
-            } else if (!canOrder) appendLine("\nOrder disabled — engine filters not met.")
-            else appendLine("\n✓ Engine-approved: order will be queued as PAPER.")
+        // Custom dialog layout
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(16))
+            setBackgroundColor(Color.parseColor("#12161f"))
         }
 
-        val dlg = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("${s.optString("symbol")} signal")
-            .setMessage(msg)
-            .setNegativeButton("Close", null)
+        // Header: symbol + direction badge
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val symView = line(symbol, WHITE, 20f, bold = true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        header.addView(symView)
+        header.addView(badge(dir.replace("?", ""), dirColor))
+        root.addView(header)
+        root.addView(spacer(12))
 
+        // Score bar
+        val scoreRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        scoreRow.addView(line("Score ", MUTED, 13f))
+        scoreRow.addView(line("$score", WHITE, 22f, bold = true))
+        scoreRow.addView(line("  •  Conf $conf%", MUTED, 13f))
+        val gradeBadge = badge(grade, if (grade == "NORMAL") "#f0a832" else ACCENT)
+        val gp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        gp.leftMargin = dp(8)
+        gradeBadge.layoutParams = gp
+        scoreRow.addView(gradeBadge)
+        root.addView(scoreRow)
+        root.addView(spacer(4))
+        root.addView(line("Strength: $strengthText", strengthColor, 13f, bold = true))
+        if (regime.isNotEmpty()) root.addView(line("Regime: $regime", "#5b6577", 12f))
+        root.addView(spacer(12))
+
+        // Divider
+        root.addView(View(this).apply {
+            setBackgroundColor(Color.parseColor("#1e2635"))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+        })
+        root.addView(spacer(12))
+
+        // Price rows helper
+        fun priceRow(label: String, value: String, color: String) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            row.addView(line(label, MUTED, 14f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(line(value, color, 16f, bold = true))
+            root.addView(row)
+            root.addView(spacer(6))
+        }
+
+        val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN) ?: Double.NaN
+        if (!entry.isNaN() && entry > 0) {
+            priceRow("Entry price", fmt(entry), dirColor)
+            val qty = s.optJSONObject("position")?.optDouble("quantity", Double.NaN) ?: Double.NaN
+            if (!qty.isNaN() && qty > 0) priceRow(if (isLong) "Buy qty" else "Sell qty", fmt(qty), WHITE)
+        } else {
+            priceRow("Entry price", "Market", dirColor)
+        }
+        val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN) ?: Double.NaN
+        if (!sl.isNaN() && sl > 0) priceRow("Stop loss", fmt(sl), RED)
+        else priceRow("Stop loss", "2% from market", RED)
+        val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN) ?: Double.NaN
+        if (!tp.isNaN() && tp > 0) priceRow("Target", fmt(tp), GREEN)
+
+        root.addView(spacer(8))
+        // Status note
+        val noteText = when {
+            signalMode == "NORMAL" && rawDir == "NO_TRADE" ->
+                "NORMAL mode: potential direction only.\nEngine did not confirm — trade manually with care."
+            !canOrder -> "Order disabled — engine filters not met."
+            else -> "✓ Engine-approved: order will be queued as PAPER."
+        }
+        val noteColor = if (canOrder) GREEN else "#8a94a6"
+        root.addView(line(noteText, noteColor, 12f))
+
+        val dlg = AlertDialog.Builder(this)
+            .setView(root)
+            .setNegativeButton("Close", null)
         if (canOrder) {
             dlg.setPositiveButton("Open PAPER order") { _, _ ->
-                queueOrder(s.optString("symbol"), rawDir)
+                queueOrder(symbol, rawDir)
             }
         }
-        dlg.show()
+        val dialog = dlg.create()
+        dialog.window?.setBackgroundDrawable(rounded("#12161f", 16))
+        dialog.show()
     }
 
     private fun queueOrder(symbol: String, direction: String) {
