@@ -152,7 +152,7 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener { setSignalMode("STRICT") }
         }
-        modeNormalBtn = styledButton("NORMAL 60-70", outlined = true).apply {
+        modeNormalBtn = styledButton("NORMAL 65-80", outlined = true).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(dp(6), 0, 0, 0)
             }
@@ -344,10 +344,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun getSignalStrength(score: Int): Pair<String, String> {
         return when {
-            score >= 70 -> Pair("Very Strong", GREEN)
-            score >= 67 -> Pair("Strong", GREEN)
-            score >= 63 -> Pair("Good", "#a3e635")
-            score >= 60 -> Pair("Moderate", "#fbbf24")
+            score >= 85 -> Pair("Very Strong", GREEN)
+            score >= 78 -> Pair("Strong", GREEN)
+            score >= 72 -> Pair("Good", "#a3e635")
+            score >= 65 -> Pair("Moderate", "#fbbf24")
             else -> Pair("Weak", MUTED)
         }
     }
@@ -380,8 +380,8 @@ class MainActivity : AppCompatActivity() {
                             if (dir == "NO_TRADE" && s.optString("status") != "ACTIVE") continue
                             if (bestScore < 85 && dir == "NO_TRADE") continue
                         } else {
-                            // Normal: scores 60-70 range
-                            if (bestScore < 60 || bestScore > 70) continue
+                            // Normal: scores 65-80 range
+                            if (bestScore < 65 || bestScore > 80) continue
                         }
                         signalsBox.addView(signalRow(s, bestScore))
                         if (++shown >= 10) break
@@ -390,7 +390,7 @@ class MainActivity : AppCompatActivity() {
                         val msg = if (signalMode == "STRICT")
                             "No actionable signals.\nAll scanned coins are NO_TRADE under strict filters."
                         else
-                            "No normal signals (60-70).\nTry refreshing or check strict mode."
+                            "No normal signals (65-80).\nTry refreshing or check strict mode."
                         signalsBox.addView(emptyState(msg))
                     }
                 }
@@ -462,20 +462,31 @@ class MainActivity : AppCompatActivity() {
         strengthRow.addView(barBg)
         card.addView(strengthRow)
         // Entry position + Stop loss (user requested: buy/sell position + SL)
+        // For NORMAL mode NO_TRADE signals, engine doesn't provide entry/SL —
+        // use market price with 2% stop guideline.
         val entryObj = s.optJSONObject("entry")
         val entryPx = entryObj?.optDouble("preferred", Double.NaN) ?: Double.NaN
         val slObj = s.optJSONObject("stop_loss")
         val slPx = slObj?.optDouble("price", Double.NaN) ?: Double.NaN
+        val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
+        val posColor = if (dir.contains("SHORT")) RED else GREEN
+        card.addView(spacer(4))
         if (!entryPx.isNaN() && entryPx > 0) {
-            card.addView(spacer(4))
-            val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
-            val posColor = if (dir.contains("SHORT")) RED else GREEN
             val posRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
             posRow.addView(line("$posLabel: ", MUTED, 13f))
             posRow.addView(line(fmt(entryPx), posColor, 14f, bold = true))
+            card.addView(posRow)
+        } else {
+            // No engine entry — use market price
+            val posRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            posRow.addView(line("$posLabel: ", MUTED, 13f))
+            posRow.addView(line("Market price", posColor, 14f, bold = true))
             card.addView(posRow)
         }
         if (!slPx.isNaN() && slPx > 0) {
@@ -486,6 +497,16 @@ class MainActivity : AppCompatActivity() {
             }
             slRow.addView(line("Stop loss: ", MUTED, 13f))
             slRow.addView(line(fmt(slPx), RED, 14f, bold = true))
+            card.addView(slRow)
+        } else {
+            // No engine SL — suggest 2% guideline
+            card.addView(spacer(2))
+            val slRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            slRow.addView(line("Stop loss: ", MUTED, 13f))
+            slRow.addView(line("2% from market", RED, 13f, bold = true))
             card.addView(slRow)
         }
         val regime = s.optString("market_regime")
@@ -521,9 +542,13 @@ class MainActivity : AppCompatActivity() {
             if (entry != null && !entry.isNaN() && !entry.isInfinite()) {
                 val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
                 appendLine("$posLabel: ${fmt(entry)}")
+            } else {
+                val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
+                appendLine("$posLabel: Market price")
             }
             val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN)
             if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop loss: ${fmt(sl)}")
+            else appendLine("Stop loss: 2% from market")
             val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN)
             if (tp != null && !tp.isNaN() && !tp.isInfinite()) appendLine("Target: ${fmt(tp)}")
             if (signalMode == "NORMAL" && rawDir == "NO_TRADE") {
