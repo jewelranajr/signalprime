@@ -695,6 +695,30 @@ export function scoreAll(
           reason: `Price already dumped ${Math.abs(pumpPct).toFixed(1)}% in last 5 candles — SHORT entry is chasing`,
         });
       }
+
+      // ---- Mean-reversion bonus ----
+      // Pump + RSI overbought + not strong bull → SHORT reversal bonus
+      // Dump + RSI oversold + not strong bear → LONG reversal bonus
+      // Only in ranging/weak regimes (don't fade strong trends)
+      const rsiNow = lastFinite(sind.rsi);
+      const isRanging = regime === 'SIDEWAYS' || regime === 'WEAK_BULL' || regime === 'WEAK_BEAR';
+      if (Number.isFinite(rsiNow) && isRanging) {
+        if (pumpPct >= 3 && rsiNow >= 70) {
+          components.push({
+            name: 'Mean reversion (pump+RSI OB)',
+            long: 0,
+            short: 8,
+            max: 8,
+          });
+        } else if (pumpPct <= -3 && rsiNow <= 30) {
+          components.push({
+            name: 'Mean reversion (dump+RSI OS)',
+            long: 8,
+            short: 0,
+            max: 8,
+          });
+        }
+      }
     }
   }
 
