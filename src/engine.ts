@@ -35,6 +35,8 @@ import type {
   AIRating,
   BreakEvent,
   TFBias,
+  EntryPlan,
+  StopLossPlan,
 } from './types';
 import { TIMEFRAMES } from './types';
 
@@ -778,12 +780,40 @@ export function noTradeSignal(
     now?: number;
     /** Evaluated scores to carry on NO_TRADE outputs (more informative than zeros). */
     scores?: { long: number; short: number };
+    /** V2: price info for levels — engine analyzes entry/SL even for NO_TRADE. */
+    priceInfo?: { close: number; atr: number };
   },
 ): MasterSignal {
   const now = opts?.now ?? Date.now();
   const mtfMap = {} as Record<Timeframe, TFBias>;
   for (const tf of TIMEFRAMES) {
     mtfMap[tf] = opts?.mtf?.views[tf]?.bias ?? 'NEUTRAL';
+  }
+  // V2: Always provide analyzed levels, even for NO_TRADE.
+  // Inferred direction from higher score; entry at market; SL at 2x ATR.
+  let entry: EntryPlan | null = null;
+  let stopLoss: StopLossPlan | null = null;
+  let marketPrice: number | null = null;
+  const pi = opts?.priceInfo;
+  if (pi && Number.isFinite(pi.close) && pi.close > 0 && Number.isFinite(pi.atr) && pi.atr > 0) {
+    marketPrice = pi.close;
+    const longScore = opts?.scores?.long ?? 0;
+    const shortScore = opts?.scores?.short ?? 0;
+    const inferredLong = longScore >= shortScore;
+    const slDistance = pi.atr * 2;
+    const slPrice = inferredLong ? pi.close - slDistance : pi.close + slDistance;
+    entry = {
+      low: pi.close,
+      high: pi.close,
+      preferred: pi.close,
+      type: 'MARKET',
+      reason: 'NO_TRADE: market price reference (engine did not confirm direction)',
+    };
+    stopLoss = {
+      price: slPrice,
+      distance_percent: (slDistance / pi.close) * 100,
+      reason: `NO_TRADE: 2x ATR stop (${inferredLong ? 'long' : 'short'} inference)`,
+    };
   }
   return {
     signal_id: `${symbol}-${now}`,
@@ -797,11 +827,12 @@ export function noTradeSignal(
     probability_estimate: 0,
     probability_note: PROBABILITY_NOTE,
     market_regime: opts?.regime ?? 'SIDEWAYS',
-    entry: null,
-    stop_loss: null,
+    entry,
+    stop_loss: stopLoss,
     take_profit: null,
     risk_reward: null,
     position: null,
+    market_price: marketPrice,
     mtf: mtfMap,
     confirmation: {
       trend: false,
@@ -1005,6 +1036,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
         ],
         now,
         scores: { long: scores.long, short: scores.short },
+        priceInfo: { close: lastClose, atr: atrLast },
       },
     );
   }
@@ -1240,6 +1272,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
     take_profit: tps,
     risk_reward: rr,
     position,
+    market_price: lastClose,
     mtf: mtfMap,
     confirmation: {
       trend: compConfirmed('Trend'),

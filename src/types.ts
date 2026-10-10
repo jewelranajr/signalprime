@@ -376,6 +376,8 @@ export interface MasterSignal {
   take_profit: TakeProfitPlan | null;
   risk_reward: RiskReward | null;
   position: PositionPlan | null;
+  /** V2: always populated — close/market price at signal time, even for NO_TRADE. */
+  market_price: number | null;
   mtf: Record<Timeframe, TFBias>;
   confirmation: {
     trend: boolean;
