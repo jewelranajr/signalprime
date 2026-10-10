@@ -127,8 +127,14 @@ const PROBABILITY_NOTE =
 // ---------------------------------------------------------------------------
 
 /**
- * Weights: Trend 20, Structure 15, Momentum 15, Volume 10, VWAP 10, S/R 10,
- * Breakout/BOS 10, Volatility/ATR 5, Liquidity 5 = 100.
+ * V2 Weights: Trend 20, Structure 15, Momentum 15, Volume 10, S/R 15,
+ * Breakout/BOS 10 (regime-gated: 0 in sideways), Volatility/ATR 10,
+ * Liquidity 5 = 100.
+ *
+ * V2 changes (2026-10-10): Removed VWAP component (proven anti-predictive:
+ * 33% long win, 26% short win in attribution analysis). Boosted S/R 10→15
+ * (best predictive component: 60.8% short win). Doubled Volatility 5→10.
+ * Breakout gated to trending regimes only (fails in chop).
  *
  * Each component scores long and short independently (0..max). Contradiction
  * penalties are then subtracted from the opposed side and recorded.
@@ -180,7 +186,6 @@ export function scoreAll(
   const adx = lastFinite(sind.adx.adx);
   const plusDI = lastFinite(sind.adx.plusDI);
   const minusDI = lastFinite(sind.adx.minusDI);
-  const vwap = lastFinite(sind.vwap);
   const volSMA = lastFinite(sind.volumeSMA);
   const volumeRatio =
     Number.isFinite(volSMA) && volSMA > 0
@@ -365,64 +370,8 @@ export function scoreAll(
     return { long: clamp(long, 0, 10), short: clamp(short, 0, 10), evL, evS };
   }
 
-  // ---- 5. VWAP (10): regime-aware bands ----
-  // In strong trends, price above/below VWAP is trend CONFIRMATION (wider bands).
-  // In sideways/choppy regimes, tight mean-reversion bands apply.
-  // (Previous version used tight bands always, systematically penalizing strong trends.)
-  function vwapC(): ComponentResult {
-    const evL: string[] = [];
-    const evS: string[] = [];
-    let long = 0;
-    let short = 0;
-    const bullRegime =
-      regime === 'STRONG_BULL' || regime === 'BREAKOUT' || regime === 'WEAK_BULL';
-    const bearRegime =
-      regime === 'STRONG_BEAR' || regime === 'BREAKDOWN' || regime === 'WEAK_BEAR';
-    if (Number.isFinite(vwap) && close > 0) {
-      const d = (close - vwap) / close;
-      if (d > 0) {
-        if (bullRegime) {
-          if (d <= 0.02) {
-            long = 10;
-            evL.push(`Price ${(d * 100).toFixed(2)}% above VWAP (healthy trend band)`);
-          } else if (d <= 0.04) long = 8;
-          else if (d <= 0.06) long = 5;
-          else long = 2; // overextended even for a trend
-        } else {
-          if (d <= 0.005) {
-            long = 10;
-            evL.push(`Price ${(d * 100).toFixed(2)}% above VWAP (healthy band)`);
-          } else if (d <= 0.015) long = 6;
-          else if (d <= 0.03) long = 3;
-          else long = 1; // overextended chase
-        }
-      }
-      if (d < 0) {
-        if (bearRegime) {
-          if (d >= -0.02) {
-            short = 10;
-            evS.push(
-              `Price ${(Math.abs(d) * 100).toFixed(2)}% below VWAP (healthy trend band)`,
-            );
-          } else if (d >= -0.04) short = 8;
-          else if (d >= -0.06) short = 5;
-          else short = 2;
-        } else {
-          if (d >= -0.005) {
-            short = 10;
-            evS.push(
-              `Price ${(Math.abs(d) * 100).toFixed(2)}% below VWAP (healthy band)`,
-            );
-          } else if (d >= -0.015) short = 6;
-          else if (d >= -0.03) short = 3;
-          else short = 1;
-        }
-      }
-    }
-    return { long, short, evL, evS };
-  }
 
-  // ---- 6. S/R (10): regime-aware ----
+  // ---- 6. S/R (15): regime-aware — boosted weight (best predictive component) ----
   // In strong trends/breakouts, price far from the same-side level is NORMAL
   // (it just broke out) — don't penalize it. The opposing-level clearance
   // carries the weight; same-side level is a backstop, not a bounce requirement.
@@ -436,55 +385,55 @@ export function scoreAll(
       regime === 'STRONG_BULL' || regime === 'BREAKOUT' || regime === 'WEAK_BULL';
     const bearRegime =
       regime === 'STRONG_BEAR' || regime === 'BREAKDOWN' || regime === 'WEAK_BEAR';
-    // LONG: no immediate overhead resistance (6) + near support bounce (4)
+    // LONG: no immediate overhead resistance (9) + near support bounce (6)
     if (!Number.isFinite(res) || res <= close) {
-      long += 6;
+      long += 9;
       if (Number.isFinite(res)) evL.push('No overhead resistance nearby');
     } else if (Number.isFinite(a)) {
       const d = (res - close) / close;
       if (d > 3 * a) {
-        long += 6;
+        long += 9;
         evL.push(`Nearest resistance ${(d * 100).toFixed(2)}% away (>3 ATR)`);
-      } else if (d > 1.5 * a) long += 4;
-      else if (d > 0.5 * a) long += 2;
+      } else if (d > 1.5 * a) long += 6;
+      else if (d > 0.5 * a) long += 3;
     }
     if (Number.isFinite(sup) && sup < close && Number.isFinite(a)) {
       const d2 = (close - sup) / close;
       if (d2 <= 0.5 * a) {
-        long += 4;
+        long += 6;
         evL.push('Price near support: bounce zone');
-      } else if (d2 <= 1.5 * a) long += 2;
+      } else if (d2 <= 1.5 * a) long += 3;
       else if (bullRegime) {
         // Breakout context: support exists below as backstop, not a bounce zone.
-        long += 2;
+        long += 3;
         evL.push('Support below as backstop (breakout context)');
       }
     }
-    // SHORT: no immediate support below (6) + near resistance rejection (4)
+    // SHORT: no immediate support below (9) + near resistance rejection (6)
     if (!Number.isFinite(sup) || sup >= close) {
-      short += 6;
+      short += 9;
       if (Number.isFinite(sup)) evS.push('No support below nearby');
     } else if (Number.isFinite(a)) {
       const d = (close - sup) / close;
       if (d > 3 * a) {
-        short += 6;
+        short += 9;
         evS.push(`Nearest support ${(d * 100).toFixed(2)}% away (>3 ATR)`);
-      } else if (d > 1.5 * a) short += 4;
-      else if (d > 0.5 * a) short += 2;
+      } else if (d > 1.5 * a) short += 6;
+      else if (d > 0.5 * a) short += 3;
     }
     if (Number.isFinite(res) && res > close && Number.isFinite(a)) {
       const d2 = (res - close) / close;
       if (d2 <= 0.5 * a) {
-        short += 4;
+        short += 6;
         evS.push('Price near resistance: rejection zone');
-      } else if (d2 <= 1.5 * a) short += 2;
+      } else if (d2 <= 1.5 * a) short += 3;
       else if (bearRegime) {
         // Breakdown context: resistance exists above as backstop.
-        short += 2;
+        short += 3;
         evS.push('Resistance above as backstop (breakdown context)');
       }
     }
-    return { long: clamp(long, 0, 10), short: clamp(short, 0, 10), evL, evS };
+    return { long: clamp(long, 0, 15), short: clamp(short, 0, 15), evL, evS };
   }
 
   // ---- 7. Breakout/BOS (10) with false-breakout protection ----
@@ -540,12 +489,22 @@ export function scoreAll(
   function breakout(): ComponentResult {
     const evL: string[] = [];
     const evS: string[] = [];
+    // V2: Breakouts fail in sideways/choppy markets (proven anti-predictive).
+    // Only score breakouts in trending regimes.
+    const sideways = regime === 'SIDEWAYS' || regime === 'LOW_VOLATILITY' || regime === 'HIGH_VOLATILITY';
+    if (sideways) {
+      evL.push('Breakout disabled: sideways regime (breakouts fail in chop)');
+      evS.push('Breakout disabled: sideways regime (breakouts fail in chop)');
+      return { long: 0, short: 0, evL, evS };
+    }
     const long = scoreBreakoutDir(true, evL);
     const short = scoreBreakoutDir(false, evS);
     return { long: clamp(long, 0, 10), short: clamp(short, 0, 10), evL, evS };
   }
 
-  // ---- 8. Volatility/ATR (5): healthy band scores, extreme => 0 ----
+  // ---- 8. Volatility/ATR (10): healthy band scores, extreme => 0 ----
+  // V2: doubled weight — volatility regime is key to position sizing and
+  // trade selection. Healthy volatility = tradeable, extreme = avoid.
   function volatility(): ComponentResult {
     const evL: string[] = [];
     const evS: string[] = [];
@@ -554,14 +513,14 @@ export function scoreAll(
       if (atrPct > 0.03) {
         v = 0; // extreme volatility: untradeable chop risk
       } else if (atrPct >= 0.002) {
-        v = 5;
+        v = 10;
         const note = `Healthy volatility (ATR ${(atrPct * 100).toFixed(2)}%)`;
         evL.push(note);
         evS.push(note);
       } else if (atrPct >= 0.001) {
-        v = 3;
+        v = 6;
       } else {
-        v = 1; // dead market
+        v = 2; // dead market
       }
     }
     return { long: v, short: v, evL, evS };
@@ -580,10 +539,9 @@ export function scoreAll(
     { name: 'Structure', max: 15, r: structure() },
     { name: 'Momentum', max: 15, r: momentum() },
     { name: 'Volume', max: 10, r: volume() },
-    { name: 'VWAP', max: 10, r: vwapC() },
-    { name: 'S/R', max: 10, r: sr() },
+    { name: 'S/R', max: 15, r: sr() },
     { name: 'Breakout/BOS', max: 10, r: breakout() },
-    { name: 'Volatility/ATR', max: 5, r: volatility() },
+    { name: 'Volatility/ATR', max: 10, r: volatility() },
     { name: 'Liquidity', max: 5, r: liquidityComp() },
   ];
   for (const d of defs) {
