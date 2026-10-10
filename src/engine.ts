@@ -1098,6 +1098,9 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
         },
       );
     }
+    // NORMAL confidence: score-based (simpler than full computeConfidence).
+    // Maps 75->60, 80->75. Lower than GOOD tier by design.
+    const normalConfidence = Math.round(60 + (normalScore - 75) * 3);
     // Build NORMAL signal with analyzed levels
     const position = sizePosition(
       deps.balance,
@@ -1118,8 +1121,8 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       signal_grade: 'NORMAL',
       long_score: round1(scores.long),
       short_score: round1(scores.short),
-      confidence: 0, // NORMAL skips confidence calculation
-      probability_estimate: 0,
+      confidence: normalConfidence,
+      probability_estimate: normalConfidence / 100,
       probability_note: PROBABILITY_NOTE,
       market_regime: regime,
       entry,
