@@ -141,6 +141,27 @@ class MainActivity : AppCompatActivity() {
         val sigCard = card()
         sigCard.addView(section("SIGNALS"))
         sigCard.addView(spacer(8))
+        // Mode toggle: STRICT vs NORMAL
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        modeStrictBtn = styledButton("STRICT 85+", outlined = false).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, dp(6), 0)
+            }
+            setOnClickListener { setSignalMode("STRICT") }
+        }
+        modeNormalBtn = styledButton("NORMAL 60-70", outlined = true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(6), 0, 0, 0)
+            }
+            setOnClickListener { setSignalMode("NORMAL") }
+        }
+        modeRow.addView(modeStrictBtn)
+        modeRow.addView(modeNormalBtn)
+        sigCard.addView(modeRow)
+        sigCard.addView(spacer(8))
         val sigRefresh = styledButton("↻  REFRESH SIGNALS", outlined = true)
         sigCard.addView(sigRefresh)
         sigCard.addView(spacer(8))
@@ -182,6 +203,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- UI helpers ----------
+
+    private var signalMode = "STRICT" // STRICT or NORMAL
+    private lateinit var modeStrictBtn: Button
+    private lateinit var modeNormalBtn: Button
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -290,6 +315,33 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- signals ----------
 
+    private fun setSignalMode(mode: String) {
+        signalMode = mode
+        // Update button styles
+        if (mode == "STRICT") {
+            modeStrictBtn.background = rounded(ACCENT, 10)
+            modeStrictBtn.setTextColor(Color.WHITE)
+            modeNormalBtn.background = rounded("#0e1420", 10, ACCENT)
+            modeNormalBtn.setTextColor(Color.parseColor(ACCENT))
+        } else {
+            modeNormalBtn.background = rounded(ACCENT, 10)
+            modeNormalBtn.setTextColor(Color.WHITE)
+            modeStrictBtn.background = rounded("#0e1420", 10, ACCENT)
+            modeStrictBtn.setTextColor(Color.parseColor(ACCENT))
+        }
+        loadSignals()
+    }
+
+    private fun getSignalStrength(score: Int): Pair<String, String> {
+        return when {
+            score >= 70 -> Pair("Very Strong", GREEN)
+            score >= 67 -> Pair("Strong", GREEN)
+            score >= 63 -> Pair("Good", "#a3e635")
+            score >= 60 -> Pair("Moderate", "#fbbf24")
+            else -> Pair("Weak", MUTED)
+        }
+    }
+
     private fun loadSignals() {
         if (ApiClient.baseUrl.isEmpty()) {
             toast("Connect to a server first")
@@ -308,13 +360,28 @@ class MainActivity : AppCompatActivity() {
                     var shown = 0
                     for (i in 0 until arr.length()) {
                         val s = arr.getJSONObject(i)
-                        if (s.optString("direction") == "NO_TRADE" &&
-                            s.optString("status") != "ACTIVE") continue
-                        signalsBox.addView(signalRow(s))
+                        val longScore = s.optDouble("long_score", 0.0).toInt()
+                        val shortScore = s.optDouble("short_score", 0.0).toInt()
+                        val bestScore = maxOf(longScore, shortScore)
+                        val dir = s.optString("direction", "NO_TRADE")
+
+                        if (signalMode == "STRICT") {
+                            // Strict: only ACTIVE A+/A signals (score 85+)
+                            if (dir == "NO_TRADE" && s.optString("status") != "ACTIVE") continue
+                            if (bestScore < 85 && dir == "NO_TRADE") continue
+                        } else {
+                            // Normal: scores 60-70 range
+                            if (bestScore < 60 || bestScore > 70) continue
+                        }
+                        signalsBox.addView(signalRow(s, bestScore))
                         if (++shown >= 10) break
                     }
                     if (shown == 0) {
-                        signalsBox.addView(emptyState("No actionable signals.\nAll scanned coins are NO_TRADE under strict filters."))
+                        val msg = if (signalMode == "STRICT")
+                            "No actionable signals.\nAll scanned coins are NO_TRADE under strict filters."
+                        else
+                            "No normal signals (60-70).\nTry refreshing or check strict mode."
+                        signalsBox.addView(emptyState(msg))
                     }
                 }
             } catch (e: Exception) {
@@ -332,11 +399,18 @@ class MainActivity : AppCompatActivity() {
         setLineSpacing(dp(4).toFloat(), 1f)
     }
 
-    private fun signalRow(s: JSONObject): View {
-        val dir = s.optString("direction", "NO_TRADE")
-        val dirColor = when (dir) {
-            "LONG" -> GREEN
-            "SHORT" -> RED
+    private fun signalRow(s: JSONObject, bestScore: Int = 0): View {
+        val longScore = s.optDouble("long_score", 0.0).toInt()
+        val shortScore = s.optDouble("short_score", 0.0).toInt()
+        val score = if (bestScore > 0) bestScore else maxOf(longScore, shortScore)
+        // In NORMAL mode, infer direction from higher score if NO_TRADE
+        var dir = s.optString("direction", "NO_TRADE")
+        if (signalMode == "NORMAL" && dir == "NO_TRADE") {
+            dir = if (longScore >= shortScore) "LONG?" else "SHORT?"
+        }
+        val dirColor = when {
+            dir == "LONG" || dir == "LONG?" -> GREEN
+            dir == "SHORT" || dir == "SHORT?" -> RED
             else -> MUTED
         }
         val card = innerCard()
@@ -352,9 +426,31 @@ class MainActivity : AppCompatActivity() {
         card.addView(top)
         card.addView(spacer(6))
         val grade = s.optString("signal_grade")
-        val score = s.optInt("score")
         val conf = s.optInt("confidence")
         card.addView(line("Grade $grade   •   Score $score   •   Conf $conf%", MUTED, 13f))
+        // Signal strength below (user requested)
+        val (strengthText, strengthColor) = getSignalStrength(score)
+        card.addView(spacer(4))
+        val strengthRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        strengthRow.addView(line("Strength: ", MUTED, 13f))
+        strengthRow.addView(line(strengthText, strengthColor, 13f, bold = true))
+        // Score bar
+        val barBg = LinearLayout(this).apply {
+            background = rounded("#0e1420", 4)
+            layoutParams = LinearLayout.LayoutParams(dp(100), dp(6)).apply {
+                setMargins(dp(8), 0, 0, 0)
+            }
+        }
+        val barFill = View(this).apply {
+            background = rounded(strengthColor, 4)
+            layoutParams = LinearLayout.LayoutParams((score * dp(100) / 100), dp(6))
+        }
+        barBg.addView(barFill)
+        strengthRow.addView(barBg)
+        card.addView(strengthRow)
         val regime = s.optString("market_regime")
         if (regime.isNotEmpty()) {
             card.addView(spacer(2))
