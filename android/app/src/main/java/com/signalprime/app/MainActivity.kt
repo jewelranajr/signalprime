@@ -494,29 +494,42 @@ class MainActivity : AppCompatActivity() {
             card.addView(line("Regime: $regime", "#5b6577", 12f))
         }
         card.isClickable = true
-        card.setOnClickListener { showSignalDetail(s) }
+        card.setOnClickListener { showSignalDetail(s, dir, score) }
         return card
     }
 
-    private fun showSignalDetail(s: JSONObject) {
-        val dir = s.optString("direction")
-        val canOrder = (dir == "LONG" || dir == "SHORT") &&
+    private fun showSignalDetail(s: JSONObject, displayDir: String = "", displayScore: Int = 0) {
+        val rawDir = s.optString("direction")
+        // Use display values from signal row (handles NORMAL mode inference)
+        val dir = if (displayDir.isNotEmpty()) displayDir else rawDir
+        val longScore = s.optDouble("long_score", 0.0).toInt()
+        val shortScore = s.optDouble("short_score", 0.0).toInt()
+        val score = if (displayScore > 0) displayScore else maxOf(longScore, shortScore)
+        val canOrder = (rawDir == "LONG" || rawDir == "SHORT") &&
             s.optString("status") == "ACTIVE" &&
             (s.optString("signal_grade") == "A+" || s.optString("signal_grade") == "A")
 
+        val (strengthText, _) = getSignalStrength(score)
         val msg = buildString {
             appendLine("Symbol: ${s.optString("symbol")}")
             appendLine("Direction: $dir")
             appendLine("Grade: ${s.optString("signal_grade")}")
-            appendLine("Score: ${s.optInt("score")}   Confidence: ${s.optInt("confidence")}%")
+            appendLine("Score: $score   Confidence: ${s.optInt("confidence")}%")
+            appendLine("Strength: $strengthText")
             appendLine("Regime: ${s.optString("market_regime")}")
             val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN)
-            if (entry != null && !entry.isNaN() && !entry.isInfinite()) appendLine("Entry: $entry")
+            if (entry != null && !entry.isNaN() && !entry.isInfinite()) {
+                val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
+                appendLine("$posLabel: ${fmt(entry)}")
+            }
             val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN)
-            if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop: $sl")
+            if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop loss: ${fmt(sl)}")
             val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN)
-            if (tp != null && !tp.isNaN() && !tp.isInfinite()) appendLine("Target: $tp")
-            if (!canOrder) appendLine("\nOrder disabled — engine filters not met.")
+            if (tp != null && !tp.isNaN() && !tp.isInfinite()) appendLine("Target: ${fmt(tp)}")
+            if (signalMode == "NORMAL" && rawDir == "NO_TRADE") {
+                appendLine("\nNote: NORMAL mode shows potential direction.")
+                appendLine("Engine did not confirm — trade manually with care.")
+            } else if (!canOrder) appendLine("\nOrder disabled — engine filters not met.")
             else appendLine("\n✓ Engine-approved: order will be queued as PAPER.")
         }
 
@@ -527,7 +540,7 @@ class MainActivity : AppCompatActivity() {
 
         if (canOrder) {
             dlg.setPositiveButton("Open PAPER order") { _, _ ->
-                queueOrder(s.optString("symbol"), dir)
+                queueOrder(s.optString("symbol"), rawDir)
             }
         }
         dlg.show()
