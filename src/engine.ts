@@ -670,6 +670,34 @@ export function scoreAll(
     }
   }
 
+  // ---- Pump/chase filter ----
+  // If price already pumped 3%+ in last 5 candles, penalize chasing.
+  // LONG after a pump = risky entry. SHORT after a dump = risky entry.
+  const h1Candles = candles['1h'] ?? [];
+  const closes = h1Candles.map((c) => c.close).filter((v) => Number.isFinite(v));
+  if (closes.length >= 6) {
+    const priceNow = closes[closes.length - 1];
+    const price5Ago = closes[closes.length - 6];
+    if (price5Ago > 0) {
+      const pumpPct = ((priceNow - price5Ago) / price5Ago) * 100;
+      if (pumpPct >= 3) {
+        penalties.push({
+          name: 'Pump chase',
+          long: -12,
+          short: 0,
+          reason: `Price already pumped ${pumpPct.toFixed(1)}% in last 5 candles — LONG entry is chasing`,
+        });
+      } else if (pumpPct <= -3) {
+        penalties.push({
+          name: 'Dump chase',
+          long: 0,
+          short: -12,
+          reason: `Price already dumped ${Math.abs(pumpPct).toFixed(1)}% in last 5 candles — SHORT entry is chasing`,
+        });
+      }
+    }
+  }
+
   // ---- Totals ----
   let long = 0;
   let short = 0;
