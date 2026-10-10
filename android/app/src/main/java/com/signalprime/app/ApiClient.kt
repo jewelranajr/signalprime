@@ -19,7 +19,7 @@ object ApiClient {
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15000
-            readTimeout = 20000
+            readTimeout = 90000
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
             if (body != null) {
