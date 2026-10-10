@@ -234,9 +234,9 @@ class MainActivity : AppCompatActivity() {
             appendLine("Score: ${s.optInt("score")}  Confidence: ${s.optInt("confidence")}")
             appendLine("Regime: ${s.optString("market_regime")}")
             val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN)
-            if (entry != null && entry.isFinite()) appendLine("Entry: $entry")
+            if (entry != null && !entry.isNaN() && !entry.isInfinite()) appendLine("Entry: $entry")
             val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN)
-            if (sl != null && sl.isFinite()) appendLine("Stop: $sl")
+            if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop: $sl")
             if (!canOrder) appendLine("\nOrder disabled — engine filters not met.")
         }
 
