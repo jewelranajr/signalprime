@@ -30,6 +30,78 @@ import { CooldownTracker, buildMarketContext } from '../filters';
 import type { MasterSignal } from '../types';
 
 const REPORT_PATH = path.join(process.cwd(), 'paper-report.json');
+const INTENTS_PATH = path.join(process.cwd(), 'paper-intents.json');
+
+/** Intent queued via POST /api/paper/order|close (virtual money only). */
+interface PaperIntent {
+  id: string;
+  type: 'open' | 'close';
+  symbol: string;
+  direction?: 'LONG' | 'SHORT';
+  signal?: MasterSignal;
+  createdAt: string;
+  status: 'pending' | 'done' | 'rejected';
+  note?: string;
+}
+
+/**
+ * Execute manual intents queued by the API through the same PaperTrader.
+ * Open intents carry the engine signal snapshot; PaperTrader re-validates
+ * grade/status/direction before filling. Runs once per cycle.
+ */
+async function processPaperIntents(
+  client: BinanceDataClient,
+  trader: PaperTrader,
+): Promise<void> {
+  let intents: PaperIntent[];
+  try {
+    const raw = fs.readFileSync(INTENTS_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    intents = parsed as PaperIntent[];
+  } catch {
+    return; // no intent file yet
+  }
+  let changed = false;
+  for (const it of intents) {
+    if (!it || it.status !== 'pending') continue;
+    try {
+      if (it.type === 'open' && it.signal) {
+        const r = trader.openFromSignal(it.signal);
+        it.status = r.id ? 'done' : 'rejected';
+        it.note = r.id ? `opened ${r.id}` : (r.reason ?? 'rejected');
+        console.log(`  intent ${it.id} (${it.type} ${it.symbol}): ${it.status} — ${it.note}`);
+      } else if (it.type === 'close') {
+        const pos = trader.account.positions.find((p) => p.symbol === it.symbol);
+        if (!pos) {
+          it.status = 'rejected';
+          it.note = 'no open position';
+        } else {
+          const ticker = await client.getTicker24h(it.symbol);
+          const price = ticker?.lastPrice ?? 0;
+          if (!(price > 0)) {
+            it.note = 'no market price; will retry next cycle';
+            continue; // keep pending
+          }
+          trader.closePosition(pos.id, price, 'MANUAL');
+          it.status = 'done';
+          it.note = `closed ${pos.id} @ ${price}`;
+        }
+        console.log(`  intent ${it.id} (${it.type} ${it.symbol}): ${it.status} — ${it.note ?? ''}`);
+      } else {
+        it.status = 'rejected';
+        it.note = 'unknown intent type';
+      }
+    } catch (err) {
+      it.status = 'rejected';
+      it.note = err instanceof Error ? err.message : 'error';
+    }
+    changed = true;
+  }
+  if (changed) {
+    fs.writeFileSync(INTENTS_PATH, JSON.stringify(intents, null, 2));
+  }
+}
 
 function parseArgs(argv: string[]): {
   symbols: string[];
@@ -224,6 +296,9 @@ async function main(): Promise<void> {
       if (market.btcViolentDump) {
         console.log('BTC violent dump — skipping new entries this cycle.');
       }
+
+      // 1b. Manual intents from the mobile/API client (virtual money only).
+      await processPaperIntents(client, trader);
 
       // 2+3. Scan symbols, open A+/A signals.
       for (const symbol of symbols) {

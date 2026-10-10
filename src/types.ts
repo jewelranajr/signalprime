@@ -420,7 +420,7 @@ export interface BacktestTrade {
   takeProfits: number[];
   entryTime: number;
   exitTime: number;
-  exitReason: 'TP1' | 'TP2' | 'TP3' | 'SL' | 'EXPIRED' | 'INVALIDATED';
+  exitReason: 'TP1' | 'TP2' | 'TP3' | 'SL' | 'EXPIRED' | 'INVALIDATED' | 'MANUAL';
   pnlPct: number;
   pnlQuote: number;
   rrRealized: number;

@@ -9,6 +9,8 @@
  */
 import Fastify, { FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { publicConfig } from './config';
 import { buildSignal, noTradeSignal } from './engine';
 import { correlationScore } from './filters';
@@ -28,6 +30,67 @@ export interface ServerDeps {
 }
 
 const API_VERSION = '1.0.0';
+
+/**
+ * Paper-trading command channel (VIRTUAL MONEY ONLY).
+ * The API server never trades by itself: POST /api/paper/order|close appends
+ * an intent to paper-intents.json, and the paper runner (scripts/paper-run.js)
+ * executes pending intents once per cycle through the same PaperTrader with
+ * the same strict engine filters. Manual orders must still pass the engine:
+ * ACTIVE status, requested direction, A+/A grade — otherwise rejected here.
+ */
+const PAPER_REPORT_PATH = path.join(process.cwd(), 'paper-report.json');
+const PAPER_INTENTS_PATH = path.join(process.cwd(), 'paper-intents.json');
+
+export interface PaperIntent {
+  id: string;
+  type: 'open' | 'close';
+  symbol: string;
+  direction?: 'LONG' | 'SHORT';
+  signal?: MasterSignal;
+  createdAt: string;
+  status: 'pending' | 'done' | 'rejected';
+  note?: string;
+}
+
+function readPaperIntents(): PaperIntent[] {
+  try {
+    const raw = fs.readFileSync(PAPER_INTENTS_PATH, 'utf8');
+    const arr = JSON.parse(raw) as unknown;
+    return Array.isArray(arr) ? (arr as PaperIntent[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePaperIntents(intents: PaperIntent[]): void {
+  fs.writeFileSync(PAPER_INTENTS_PATH, JSON.stringify(intents, null, 2));
+}
+
+interface PaperReportAccount {
+  balance?: number;
+  equity?: number;
+  openPositions?: Array<{ symbol: string }>;
+}
+
+function readPaperReport(): { account: PaperReportAccount; generatedAt?: string; cycle?: number } | null {
+  try {
+    const raw = fs.readFileSync(PAPER_REPORT_PATH, 'utf8');
+    const report = JSON.parse(raw) as {
+      account?: PaperReportAccount;
+      generatedAt?: string;
+      cycle?: number;
+    };
+    if (!report || typeof report !== 'object' || !report.account) return null;
+    return { account: report.account, generatedAt: report.generatedAt, cycle: report.cycle };
+  } catch {
+    return null;
+  }
+}
+
+function newIntentId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /** Uppercase alphanumerics, 2-20 chars, spot symbol ending in USDT. */
 const SYMBOL_RE = /^[A-Z0-9]{2,20}$/;
@@ -292,6 +355,129 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       // 200: never crash on one symbol; report the failure as JSON.
       return { symbol: raw, error: `Internal error: ${safeMessage(err)}` };
     }
+  });
+
+    // ---------------------------------------------------------------- paper status
+  app.get('/api/paper/status', async () => {
+    const report = readPaperReport();
+    if (!report) {
+      return { running: false, note: 'paper runner has not written a report yet' };
+    }
+    return { running: true, virtual: true, ...report };
+  });
+
+  // ---------------------------------------------------------------- paper intents
+  app.get('/api/paper/intents', async () => {
+    const intents = readPaperIntents();
+    return { count: intents.length, intents: intents.slice(-20).reverse() };
+  });
+
+  // ---------------------------------------------------------------- paper order (manual, still engine-gated)
+  app.post('/api/paper/order', async (req, reply) => {
+    const body = (req.body ?? {}) as { symbol?: unknown; direction?: unknown };
+    const symbol = typeof body.symbol === 'string' ? body.symbol.toUpperCase() : '';
+    const direction = body.direction;
+    if (!isValidSymbol(symbol)) {
+      reply.code(400);
+      return { error: 'Invalid symbol. Expected format like BTCUSDT.' };
+    }
+    if (direction !== 'LONG' && direction !== 'SHORT') {
+      reply.code(400);
+      return { error: 'direction must be LONG or SHORT' };
+    }
+    let signal: MasterSignal;
+    try {
+      signal = await analyzeSymbol(deps, symbol, { record: false });
+    } catch {
+      reply.code(500);
+      return { error: 'Internal error' };
+    }
+    const gradeOk = signal.signal_grade === 'A+' || signal.signal_grade === 'A';
+    if (signal.direction !== direction || signal.status !== 'ACTIVE' || !gradeOk) {
+      reply.code(400);
+      return {
+        error:
+          `rejected by strict engine: signal is ${signal.direction} ` +
+          `(grade ${signal.signal_grade}, status ${signal.status}) — ` +
+          'manual orders must pass the same filters',
+        engine: {
+          direction: signal.direction,
+          grade: signal.signal_grade,
+          status: signal.status,
+          confidence: signal.confidence,
+        },
+      };
+    }
+    const report = readPaperReport();
+    const alreadyOpen = report?.account.openPositions?.some((p) => p.symbol === symbol);
+    if (alreadyOpen) {
+      reply.code(400);
+      return { error: `a paper position is already open for ${symbol}` };
+    }
+    const intents = readPaperIntents();
+    if (intents.some((i) => i.status === 'pending' && i.symbol === symbol)) {
+      reply.code(400);
+      return { error: `an intent for ${symbol} is already pending` };
+    }
+    const intent: PaperIntent = {
+      id: newIntentId(),
+      type: 'open',
+      symbol,
+      direction,
+      signal,
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+    };
+    intents.push(intent);
+    try {
+      writePaperIntents(intents);
+    } catch {
+      reply.code(500);
+      return { error: 'Internal error' };
+    }
+    return {
+      ok: true,
+      intentId: intent.id,
+      queued: 'the paper runner executes this on its next cycle',
+      virtual: true,
+      note: 'VIRTUAL MONEY ONLY — no real orders are placed',
+    };
+  });
+
+  // ---------------------------------------------------------------- paper close
+  app.post('/api/paper/close', async (req, reply) => {
+    const body = (req.body ?? {}) as { symbol?: unknown };
+    const symbol = typeof body.symbol === 'string' ? body.symbol.toUpperCase() : '';
+    if (!isValidSymbol(symbol)) {
+      reply.code(400);
+      return { error: 'Invalid symbol. Expected format like BTCUSDT.' };
+    }
+    const report = readPaperReport();
+    const open = report?.account.openPositions?.some((p) => p.symbol === symbol);
+    if (!open) {
+      reply.code(400);
+      return { error: `no open paper position for ${symbol}` };
+    }
+    const intents = readPaperIntents();
+    if (intents.some((i) => i.status === 'pending' && i.type === 'close' && i.symbol === symbol)) {
+      reply.code(400);
+      return { error: `a close intent for ${symbol} is already pending` };
+    }
+    const intent: PaperIntent = {
+      id: newIntentId(),
+      type: 'close',
+      symbol,
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+    };
+    intents.push(intent);
+    try {
+      writePaperIntents(intents);
+    } catch {
+      reply.code(500);
+      return { error: 'Internal error' };
+    }
+    return { ok: true, intentId: intent.id, virtual: true };
   });
 
   return app;
