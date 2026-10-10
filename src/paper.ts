@@ -104,8 +104,8 @@ export class PaperTrader {
     if (signal.status !== 'ACTIVE') {
       return { id: null, reason: `rejected: signal status is ${signal.status}, expected ACTIVE` };
     }
-    if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A') {
-      return { id: null, reason: `rejected: grade ${signal.signal_grade} is below A tier` };
+    if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A' && signal.signal_grade !== 'NORMAL') {
+      return { id: null, reason: `rejected: grade ${signal.signal_grade} is below A tier (NORMAL allowed for separate tracking)` };
     }
     if (!signal.entry || !signal.stop_loss || !signal.take_profit || !signal.position) {
       return { id: null, reason: 'rejected: incomplete trade plan (entry/SL/TP/position)' };

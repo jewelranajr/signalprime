@@ -1011,16 +1011,27 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
   );
 
   // ---- 8. Candidate selection (never forced) ----
+  // V2: Two tiers — GOOD (85+) and NORMAL (65-80). NORMAL gets direction
+  // from higher score for paper trading entry at 75+.
   const shortThreshold = market.btcStrongBull
     ? config.minScore + 5 // BTC strong bull raises the bar for SHORTs
     : config.minScore;
   const longCandidate = scores.long >= config.minScore;
   const shortCandidate = scores.short >= shortThreshold;
+  // NORMAL tier candidates (65-80)
+  const normalLongCandidate = scores.long >= config.normalMinScore && scores.long <= config.normalMaxScore;
+  const normalShortCandidate = scores.short >= config.normalMinScore && scores.short <= config.normalMaxScore;
   let direction: Direction = 'NO_TRADE';
+  let isNormalTier = false;
   if (longCandidate && shortCandidate)
     direction = scores.long >= scores.short ? 'LONG' : 'SHORT';
   else if (longCandidate) direction = 'LONG';
   else if (shortCandidate) direction = 'SHORT';
+  else if (normalLongCandidate || normalShortCandidate) {
+    // NORMAL tier: infer direction from higher score
+    direction = scores.long >= scores.short ? 'LONG' : 'SHORT';
+    isNormalTier = true;
+  }
   if (direction === 'NO_TRADE') {
     return noTradeSignal(
       input.symbol,
@@ -1067,6 +1078,69 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       warnings: dataIssues,
       now,
     });
+  }
+
+  // ---- V2: NORMAL tier bypass ----
+  // NORMAL (65-80) signals skip strict AI/confidence gates.
+  // They get entry/SL from analysis and grade NORMAL for separate tracking.
+  // Paper trader opens them at 75+ (user configured).
+  if (isNormalTier) {
+    const normalScore = Math.max(scores.long, scores.short);
+    // Only 75+ qualifies for paper entry (user threshold)
+    if (normalScore < 75) {
+      return noTradeSignal(
+        input.symbol,
+        [`NORMAL tier below paper entry threshold: ${round1(normalScore)} < 75`],
+        {
+          mtf, regime, warnings: dataIssues, now,
+          scores: { long: scores.long, short: scores.short },
+          priceInfo: { close: lastClose, atr: atrLast },
+        },
+      );
+    }
+    // Build NORMAL signal with analyzed levels
+    const position = sizePosition(
+      deps.balance,
+      config.riskPercent,
+      entry.preferred,
+      sl.price,
+      leverage,
+    );
+    const normalMtfMap = {} as Record<Timeframe, TFBias>;
+    for (const tf of TIMEFRAMES) {
+      normalMtfMap[tf] = mtf.views[tf]?.bias ?? 'NEUTRAL';
+    }
+    return {
+      signal_id: `${input.symbol}-${now}`,
+      symbol: input.symbol,
+      direction,
+      status: 'ACTIVE',
+      signal_grade: 'NORMAL',
+      long_score: round1(scores.long),
+      short_score: round1(scores.short),
+      confidence: 0, // NORMAL skips confidence calculation
+      probability_estimate: 0,
+      probability_note: PROBABILITY_NOTE,
+      market_regime: regime,
+      entry,
+      stop_loss: sl,
+      take_profit: tps,
+      risk_reward: rr,
+      position,
+      market_price: lastClose,
+      mtf: normalMtfMap,
+      confirmation: {
+        trend: false, structure: false, momentum: false, volume: false,
+        vwap: false, breakout: false, liquidity: false,
+      },
+      reasons: [`NORMAL tier signal (score ${round1(normalScore)}): engine analyzed entry/SL`],
+      warnings: dataIssues,
+      invalidation: [],
+      correlation_score: 0,
+      ai_rating: 'AI_NEUTRAL',
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + config.signalTtlMs).toISOString(),
+    };
   }
 
   // ---- AI confirmation ----
