@@ -162,6 +162,15 @@ class MainActivity : AppCompatActivity() {
         modeRow.addView(modeNormalBtn)
         sigCard.addView(modeRow)
         sigCard.addView(spacer(8))
+        // Win rate display (from paper trading history)
+        winRateText = TextView(this).apply {
+            text = "Win rate: —"
+            textSize = 13f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+        }
+        sigCard.addView(winRateText)
+        sigCard.addView(spacer(8))
         val sigRefresh = styledButton("↻  REFRESH SIGNALS", outlined = true)
         sigCard.addView(sigRefresh)
         sigCard.addView(spacer(8))
@@ -207,6 +216,7 @@ class MainActivity : AppCompatActivity() {
     private var signalMode = "STRICT" // STRICT or NORMAL
     private lateinit var modeStrictBtn: Button
     private lateinit var modeNormalBtn: Button
+    private lateinit var winRateText: TextView
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -540,6 +550,30 @@ class MainActivity : AppCompatActivity() {
                     pnlRow.addView(line("$${fmt(pnl)}", pnlColor, 15f, bold = true))
                     paperBox.addView(pnlRow)
                     paperBox.addView(spacer(8))
+
+                    // Win rate from trade history
+                    val history = acc.optJSONArray("tradeHistory")
+                    var wins = 0
+                    var total = 0
+                    if (history != null) {
+                        for (i in 0 until history.length()) {
+                            val t = history.getJSONObject(i)
+                            val pnlT = t.optDouble("pnl", 0.0)
+                            // Only count closed trades with valid pnl
+                            if (t.has("pnl")) {
+                                total++
+                                if (pnlT > 0) wins++
+                            }
+                        }
+                    }
+                    val winRateStr = if (total > 0) {
+                        val pct = (wins * 100.0 / total).toInt()
+                        "$pct% ($wins/$total)"
+                    } else {
+                        "— (no closed trades yet)"
+                    }
+                    winRateText.text = "Win rate: $winRateStr"
+                    winRateText.setTextColor(Color.parseColor(if (total > 0) WHITE else MUTED))
 
                     val positions = acc.optJSONArray("openPositions")
                     if (positions == null || positions.length() == 0) {
