@@ -549,6 +549,31 @@ export function scoreAll(
   }
 
   // ---- Contradiction penalties (subtracted from the opposed side) ----
+  // V2: Funding rate contrarian overlay. Extreme funding = crowded positioning.
+  // When the crowd is extremely long (high funding), fade the LONG side.
+  // When the crowd is extremely short (negative funding), fade the SHORT side.
+  const frZRaw = market.fundingRateZScore;
+  const frZ: number | null = typeof frZRaw === 'number' && Number.isFinite(frZRaw) ? frZRaw : null;
+  if (frZ !== null) {
+    if (frZ > 2) {
+      // Crowded longs: penalize LONG, this is a contrarian SHORT bias
+      penalties.push({
+        name: 'Funding contrarian',
+        long: -10,
+        short: 0,
+        reason: `Extreme high funding (z=${frZ.toFixed(1)}): crowded longs, fading LONG side`,
+      });
+    } else if (frZ < -2) {
+      // Crowded shorts: penalize SHORT, contrarian LONG bias
+      penalties.push({
+        name: 'Funding contrarian',
+        long: 0,
+        short: -10,
+        reason: `Extreme negative funding (z=${frZ.toFixed(1)}): crowded shorts, fading SHORT side`,
+      });
+    }
+  }
+
   const view = ptf ? mtf.views[ptf] : undefined;
   if (mtf.htfBias === 'BULLISH' && view && view.score < -20) {
     penalties.push({

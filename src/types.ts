@@ -286,6 +286,9 @@ export interface MarketContext {
   btcViolentDump: boolean;
   btcStrongBull: boolean;
   ethViolentDump: boolean;
+  /** V2: funding rate data for contrarian signals (optional). */
+  fundingRate?: number;
+  fundingRateZScore?: number; // standardized: >2 = extremely crowded long, <-2 = extremely crowded short
 }
 
 /** Structured features consumed by the rules-based AI confirmation layer. */
