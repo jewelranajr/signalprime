@@ -102,13 +102,18 @@ function recencyFactor(age: number, horizon: number): number {
   return 1 - age / horizon;
 }
 
-/** Primary timeframe for scoring: '1h', else the first TF with indicators. */
+/** Primary timeframe for scoring: '4h' (less noise, better quality), else '1h', else first available. */
 function pickPrimaryTF(
   indicators: Record<Timeframe, IndicatorSet>,
 ): Timeframe | null {
-  if (indicators['1h']) return '1h';
+  const hasData = (tf: Timeframe): boolean => {
+    const ind = indicators[tf];
+    return !!ind && Array.isArray((ind as any).ema20) && (ind as any).ema20.length > 0;
+  };
+  if (hasData('4h')) return '4h';
+  if (hasData('1h')) return '1h';
   for (const tf of TIMEFRAMES) {
-    if (indicators[tf]) return tf;
+    if (hasData(tf)) return tf;
   }
   return null;
 }
@@ -670,8 +675,8 @@ export function scoreAll(
     }
   }
 
-  // ---- Pump/chase filter ----
-  // If price already pumped 3%+ in last 5 candles, penalize chasing.
+  // ---- Pump/chase filter (1h for recent move detection) ----
+  // If price already pumped 3%+ in last 5x 1h candles, penalize chasing.
   // LONG after a pump = risky entry. SHORT after a dump = risky entry.
   const h1Candles = candles['1h'] ?? [];
   const closes = h1Candles.map((c) => c.close).filter((v) => Number.isFinite(v));
@@ -696,26 +701,26 @@ export function scoreAll(
         });
       }
 
-      // ---- Mean-reversion bonus ----
-      // Pump + RSI overbought + not strong bull → SHORT reversal bonus
-      // Dump + RSI oversold + not strong bear → LONG reversal bonus
+      // ---- Mean-reversion (as penalty on the wrong direction) ----
+      // Pump + RSI overbought + not strong bull → penalize LONG (favors SHORT)
+      // Dump + RSI oversold + not strong bear → penalize SHORT (favors LONG)
       // Only in ranging/weak regimes (don't fade strong trends)
       const rsiNow = lastFinite(sind.rsi);
       const isRanging = regime === 'SIDEWAYS' || regime === 'WEAK_BULL' || regime === 'WEAK_BEAR';
       if (Number.isFinite(rsiNow) && isRanging) {
         if (pumpPct >= 3 && rsiNow >= 70) {
-          components.push({
-            name: 'Mean reversion (pump+RSI OB)',
-            long: 0,
-            short: 8,
-            max: 8,
+          penalties.push({
+            name: 'Mean reversion',
+            long: -8,
+            short: 0,
+            reason: `Pump ${pumpPct.toFixed(1)}% + RSI ${rsiNow.toFixed(0)} overbought in ${regime} — LONG penalized, SHORT reversal favored`,
           });
         } else if (pumpPct <= -3 && rsiNow <= 30) {
-          components.push({
-            name: 'Mean reversion (dump+RSI OS)',
-            long: 8,
-            short: 0,
-            max: 8,
+          penalties.push({
+            name: 'Mean reversion',
+            long: 0,
+            short: -8,
+            reason: `Dump ${Math.abs(pumpPct).toFixed(1)}% + RSI ${rsiNow.toFixed(0)} oversold in ${regime} — SHORT penalized, LONG reversal favored`,
           });
         }
       }
@@ -971,7 +976,8 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
   const now = deps.now ?? Date.now();
   const config: EngineConfig = deps.config;
   const market = deps.market;
-  const primary: Timeframe = '1h';
+  // 4h primary for better signal quality (less noise), fallback to 1h if 4h data missing
+  const primary: Timeframe = (input.candles['4h'] && input.candles['4h'].length >= 50) ? '4h' : '1h';
 
   // ---- 2. Validate every TF; primary must have enough valid candles ----
   const validated = {} as Record<Timeframe, Candle[]>;
