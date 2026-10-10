@@ -461,6 +461,33 @@ class MainActivity : AppCompatActivity() {
         barBg.addView(barFill)
         strengthRow.addView(barBg)
         card.addView(strengthRow)
+        // Entry position + Stop loss (user requested: buy/sell position + SL)
+        val entryObj = s.optJSONObject("entry")
+        val entryPx = entryObj?.optDouble("preferred", Double.NaN) ?: Double.NaN
+        val slObj = s.optJSONObject("stop_loss")
+        val slPx = slObj?.optDouble("price", Double.NaN) ?: Double.NaN
+        if (!entryPx.isNaN() && entryPx > 0) {
+            card.addView(spacer(4))
+            val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
+            val posColor = if (dir.contains("SHORT")) RED else GREEN
+            val posRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            posRow.addView(line("$posLabel: ", MUTED, 13f))
+            posRow.addView(line(fmt(entryPx), posColor, 14f, bold = true))
+            card.addView(posRow)
+        }
+        if (!slPx.isNaN() && slPx > 0) {
+            card.addView(spacer(2))
+            val slRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            slRow.addView(line("Stop loss: ", MUTED, 13f))
+            slRow.addView(line(fmt(slPx), RED, 14f, bold = true))
+            card.addView(slRow)
+        }
         val regime = s.optString("market_regime")
         if (regime.isNotEmpty()) {
             card.addView(spacer(2))
