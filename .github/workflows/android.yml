@@ -1,7 +1,8 @@
-name: android
+name: Build SignalPrime Android APK
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -9,43 +10,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-      - name: Prepare sources (unzip if the tree was uploaded as a zip)
+
+      - name: Prepare sources
         run: |
+          # support both layouts: repo-root android/ or a zip upload containing it
           if [ ! -d "android" ]; then
-            ZIP=$(ls *.zip 2>/dev/null | head -1)
-            if [ -z "$ZIP" ]; then
-              echo "No android/ directory and no zip file found in repo root."
-              exit 1
-            fi
-            echo "Unzipping $ZIP ..."
-            unzip -q "$ZIP"
+            for z in *.zip; do
+              [ -f "$z" ] && unzip -q "$z" && break
+            done
           fi
-          ANDROID_DIR=$(find . -maxdepth 3 -type d -name android -not -path "./.git*" | head -1)
-          if [ -z "$ANDROID_DIR" ]; then
-            echo "android/ directory not found."
-            exit 1
+          if [ -f "android.zip" ] && [ ! -d "android" ]; then
+            unzip -q android.zip
           fi
-          echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
-          echo "Will build in: $ANDROID_DIR"
+          ls -R | head -50
+          test -d android || (echo "no android/ project found" && exit 1)
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.10.2
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
-        working-directory: ${{ env.ANDROID_DIR }}
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: signalprime-debug-apk
-          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/*.apk
