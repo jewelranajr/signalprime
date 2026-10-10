@@ -478,23 +478,22 @@ class MainActivity : AppCompatActivity() {
         barBg.addView(barFill)
         strengthRow.addView(barBg)
         card.addView(strengthRow)
-        // Entry position + Stop loss (user requested: buy/sell position + SL)
+        // Entry price + Stop loss (user requested)
         // For NORMAL mode NO_TRADE signals, engine doesn't provide entry/SL —
         // use market price with 2% stop guideline.
         val entryObj = s.optJSONObject("entry")
         val entryPx = entryObj?.optDouble("preferred", Double.NaN) ?: Double.NaN
         val slObj = s.optJSONObject("stop_loss")
         val slPx = slObj?.optDouble("price", Double.NaN) ?: Double.NaN
-        val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
-        val posColor = if (dir.contains("SHORT")) RED else GREEN
+        val entryColor = if (dir.contains("SHORT")) RED else GREEN
         card.addView(spacer(4))
         if (!entryPx.isNaN() && entryPx > 0) {
             val posRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            posRow.addView(line("$posLabel: ", MUTED, 13f))
-            posRow.addView(line(fmt(entryPx), posColor, 14f, bold = true))
+            posRow.addView(line("Entry: ", MUTED, 13f))
+            posRow.addView(line(fmt(entryPx), entryColor, 14f, bold = true))
             card.addView(posRow)
         } else {
             // No engine entry — use market price
@@ -502,8 +501,8 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            posRow.addView(line("$posLabel: ", MUTED, 13f))
-            posRow.addView(line("Market price", posColor, 14f, bold = true))
+            posRow.addView(line("Entry: ", MUTED, 13f))
+            posRow.addView(line("Market price", entryColor, 14f, bold = true))
             card.addView(posRow)
         }
         if (!slPx.isNaN() && slPx > 0) {
@@ -557,11 +556,14 @@ class MainActivity : AppCompatActivity() {
             appendLine("Regime: ${s.optString("market_regime")}")
             val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN)
             if (entry != null && !entry.isNaN() && !entry.isInfinite()) {
-                val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
-                appendLine("$posLabel: ${fmt(entry)}")
+                appendLine("Entry price: ${fmt(entry)}")
+                val qty = s.optJSONObject("position")?.optDouble("quantity", Double.NaN)
+                if (qty != null && !qty.isNaN() && !qty.isInfinite() && qty > 0) {
+                    val posLabel = if (dir.contains("SHORT")) "Sell qty" else "Buy qty"
+                    appendLine("$posLabel: ${fmt(qty)}")
+                }
             } else {
-                val posLabel = if (dir.contains("SHORT")) "Sell position" else "Buy position"
-                appendLine("$posLabel: Market price")
+                appendLine("Entry price: Market price")
             }
             val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN)
             if (sl != null && !sl.isNaN() && !sl.isInfinite()) appendLine("Stop loss: ${fmt(sl)}")
@@ -748,5 +750,13 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun fmt(n: Double): String = String.format("%.2f", n)
+    private fun fmt(n: Double): String {
+        return when {
+            n >= 1000 -> String.format("%.1f", n)
+            n >= 100 -> String.format("%.2f", n)
+            n >= 1 -> String.format("%.4f", n)
+            n >= 0.01 -> String.format("%.6f", n)
+            else -> String.format("%.8f", n)
+        }
+    }
 }
