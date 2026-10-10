@@ -31,6 +31,7 @@ import type { MasterSignal } from '../types';
 
 const REPORT_PATH = path.join(process.cwd(), 'paper-report.json');
 const INTENTS_PATH = path.join(process.cwd(), 'paper-intents.json');
+const SIGNALS_CACHE_PATH = path.join(process.cwd(), 'signals-cache.json');
 
 /** Intent queued via POST /api/paper/order|close (virtual money only). */
 interface PaperIntent {
@@ -301,6 +302,7 @@ async function main(): Promise<void> {
       await processPaperIntents(client, trader);
 
       // 2+3. Scan symbols, open A+/A signals.
+      const allSignals: MasterSignal[] = [];
       for (const symbol of symbols) {
         if (stop) break;
         let signal: MasterSignal;
@@ -322,6 +324,7 @@ async function main(): Promise<void> {
           console.log(`${symbol}: analysis failed (${err instanceof Error ? err.message : err})`);
           continue;
         }
+        allSignals.push(signal);
         console.log(
           `${symbol}: ${signal.direction} grade=${signal.signal_grade} ` +
             `long=${fmt(signal.long_score, 1)} short=${fmt(signal.short_score, 1)} ` +
@@ -342,6 +345,17 @@ async function main(): Promise<void> {
           console.log(`  not opened: ${opened.reason}`);
         }
       }
+
+      // Save signals cache for /api/signals (instant API response).
+      // Sort by best score descending, keep top 50.
+      allSignals.sort((a, b) => Math.max(b.long_score, b.short_score) - Math.max(a.long_score, a.short_score));
+      try {
+        fs.writeFileSync(SIGNALS_CACHE_PATH, JSON.stringify({
+          generatedAt: new Date().toISOString(),
+          count: allSignals.length,
+          signals: allSignals.slice(0, 50),
+        }));
+      } catch { /* non-fatal */ }
 
       // 4. Settle open positions on fresh closed 15m candles.
       const openSymbols = [...new Set(trader.account.positions.map((p) => p.symbol))];

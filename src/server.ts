@@ -286,9 +286,11 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------------------------------------------------------------- bulk scan
   // Signal cache: fresh scans are slow on Render free tier (~15s per 5 symbols).
-  // Cache for 5 minutes — the paper runner rescans every 15 min anyway.
+  // Primary source: signals-cache.json written by paper-run.js every cycle.
+  // Fallback: in-memory cache from on-demand scan.
   let signalsCache: { ts: number; limit: number; result: unknown } | null = null;
   const SIGNALS_CACHE_MS = 5 * 60 * 1000;
+  const SIGNALS_FILE = path.join(process.cwd(), 'signals-cache.json');
 
   app.get('/api/signals', async (req, reply) => {
     const q = (req.query as { limit?: string }).limit;
@@ -301,7 +303,16 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       }
       limit = n;
     }
-    // Serve from cache if fresh
+    // 1. Try signals-cache.json from paper runner (instant).
+    try {
+      const raw = fs.readFileSync(SIGNALS_FILE, 'utf8');
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.signals)) {
+        const signals = cached.signals.slice(0, limit);
+        return { count: signals.length, signals, cached: true, generatedAt: cached.generatedAt };
+      }
+    } catch { /* fall through to live scan */ }
+    // 2. In-memory cache from previous on-demand scan.
     if (signalsCache && signalsCache.limit === limit && Date.now() - signalsCache.ts < SIGNALS_CACHE_MS) {
       return signalsCache.result;
     }
