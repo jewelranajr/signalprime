@@ -588,6 +588,61 @@ class MainActivity : AppCompatActivity() {
         return card
     }
 
+    // In-app TradingView chart via WebView
+    private fun showChartDialog(symbol: String) {
+        val webView = android.webkit.WebView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(420)
+            )
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient = android.webkit.WebViewClient()
+        }
+        val tvSymbol = "BINANCE:${symbol}"
+        val html = """
+            <!DOCTYPE html>
+            <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>html,body{margin:0;padding:0;background:#12161f;height:100%}</style>
+            </head><body>
+            <div class="tradingview-widget-container" style="height:100%;width:100%">
+              <div id="tv_chart" style="height:100%;width:100%"></div>
+              <script src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+              {
+                "symbol": "$tvSymbol",
+                "interval": "60",
+                "theme": "dark",
+                "style": "1",
+                "locale": "en",
+                "hide_side_toolbar": false,
+                "allow_symbol_change": true,
+                "support_host": "https://www.tradingview.com"
+              }
+              </script>
+            </div>
+            </body></html>
+        """.trimIndent()
+        webView.loadDataWithBaseURL("https://www.tradingview.com", html, "text/html", "UTF-8", null)
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(webView)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("$symbol chart")
+            .setView(container)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("↗ Browser") { _, _ ->
+                try {
+                    startActivity(android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://www.tradingview.com/chart/?symbol=$tvSymbol")
+                    ))
+                } catch (_: Exception) { }
+            }
+            .show()
+    }
+
     private fun showSignalDetail(s: JSONObject, displayDir: String = "", displayScore: Int = 0) {
         val rawDir = s.optString("direction")
         val dir = if (displayDir.isNotEmpty()) displayDir else rawDir
@@ -693,6 +748,9 @@ class MainActivity : AppCompatActivity() {
         val dlg = AlertDialog.Builder(this)
             .setView(root)
             .setNegativeButton("Close", null)
+            .setNeutralButton("📊 Chart") { _, _ ->
+                showChartDialog(symbol)
+            }
         if (canOrder) {
             dlg.setPositiveButton("Open PAPER order") { _, _ ->
                 queueOrder(symbol, rawDir)
