@@ -407,6 +407,40 @@ export class BinanceDataClient {
   }
 
   /**
+   * All USDT 24h tickers in ONE API call. Returns a Map of symbol ->
+   * { quoteVolume, priceChangePct, lastPrice }. Used by the scanner to avoid
+   * one ticker call per symbol (150 calls -> 1 call per cycle).
+   * Returns an empty Map on failure.
+   */
+  async getAllTickersMap(): Promise<Map<string, { quoteVolume: number; priceChangePct: number; lastPrice: number }>> {
+    const result = new Map<string, { quoteVolume: number; priceChangePct: number; lastPrice: number }>();
+    try {
+      const data = await this.httpGet('/api/v3/ticker/24hr');
+      if (!Array.isArray(data)) {
+        this.log('warn', 'getAllTickersMap: malformed payload; returning empty map');
+        return result;
+      }
+      for (const item of data) {
+        if (typeof item !== 'object' || item === null) continue;
+        const rec = item as Record<string, unknown>;
+        const sym = rec.symbol;
+        if (typeof sym !== 'string' || !sym.endsWith('USDT')) continue;
+        const qv = Number(rec.quoteVolume);
+        const pct = Number(rec.priceChangePercent);
+        const lp = Number(rec.lastPrice);
+        result.set(sym, {
+          quoteVolume: Number.isFinite(qv) ? qv : 0,
+          priceChangePct: Number.isFinite(pct) ? pct : 0,
+          lastPrice: Number.isFinite(lp) && lp > 0 ? lp : 0,
+        });
+      }
+    } catch (err) {
+      this.log('warn', `getAllTickersMap failed: ${errMessage(err)}; returning empty map`);
+    }
+    return result;
+  }
+
+  /**
    * Top USDT pairs by 24h quote volume, e.g. ['BTCUSDT', ...].
    * Excludes leveraged tokens (UP/DOWN/BULL/BEAR) and fiat/stablecoin pairs.
    * Returns [] on failure.
