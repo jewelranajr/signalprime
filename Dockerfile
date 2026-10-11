@@ -15,8 +15,7 @@ RUN npm run build
 ENV PORT=8080 HOST=0.0.0.0 NODE_ENV=production
 EXPOSE 8080
 
-# Run paper runner (background) + API server (foreground).
+# Run paper runner (background, auto-restart on crash) + API server (foreground).
 # Paper state lives in paper-report.json; it regenerates every cycle.
-# Force redeploy 2026-10-11: restart stuck paper runner (cycle 4, 12h stale)
-# 5-min cycles to catch NORMAL signals faster (user requested).
-CMD ["sh", "-c", "node dist/scripts/paper-run.js --symbols-file top500.json --batch 100 --every-min 5 >> paper-trading.log 2>&1 & exec node dist/index.js"]
+# 15-min cycles: 5-min proved too heavy for Render free tier (runner stalls).
+CMD ["sh", "-c", "while true; do node dist/scripts/paper-run.js --symbols-file top500.json --batch 100 --every-min 15 >> paper-trading.log 2>&1; echo \"paper-runner exited at $(date), restarting in 10s\" >> paper-trading.log; sleep 10; done & exec node dist/index.js"]
