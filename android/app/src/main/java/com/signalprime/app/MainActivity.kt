@@ -166,7 +166,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        modeStrictBtn = styledButton("STRICT 85+", outlined = false).apply {
+        modeStrictBtn = styledButton("GOOD 85+", outlined = false).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(0, 0, dp(6), 0)
             }
@@ -470,14 +470,11 @@ class MainActivity : AppCompatActivity() {
         val longScore = s.optDouble("long_score", 0.0).toInt()
         val shortScore = s.optDouble("short_score", 0.0).toInt()
         val score = if (bestScore > 0) bestScore else maxOf(longScore, shortScore)
-        // In NORMAL mode, infer direction from higher score if NO_TRADE
-        var dir = s.optString("direction", "NO_TRADE")
-        if (signalMode == "NORMAL" && dir == "NO_TRADE") {
-            dir = if (longScore >= shortScore) "LONG?" else "SHORT?"
-        }
+        // NO_TRADE rows show status and score only — never infer direction
+        val dir = s.optString("direction", "NO_TRADE")
         val dirColor = when {
-            dir == "LONG" || dir == "LONG?" -> GREEN
-            dir == "SHORT" || dir == "SHORT?" -> RED
+            dir == "LONG" -> GREEN
+            dir == "SHORT" -> RED
             else -> MUTED
         }
         val card = innerCard()
@@ -543,13 +540,13 @@ class MainActivity : AppCompatActivity() {
             posRow.addView(line(fmt(entryPx), entryColor, 14f, bold = true))
             card.addView(posRow)
         } else {
-            // No engine entry — use market price
+            // No engine entry — show nothing (NO_TRADE rows: status + score only)
             val posRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
             posRow.addView(line("Entry: ", MUTED, 13f))
-            posRow.addView(line("Market price", entryColor, 14f, bold = true))
+            posRow.addView(line("—", MUTED, 14f))
             card.addView(posRow)
         }
         if (!slPx.isNaN() && slPx > 0) {
@@ -562,14 +559,14 @@ class MainActivity : AppCompatActivity() {
             slRow.addView(line(fmt(slPx), RED, 14f, bold = true))
             card.addView(slRow)
         } else {
-            // No engine SL — suggest 2% guideline
+            // No engine SL — show nothing (NO_TRADE rows: status + score only)
             card.addView(spacer(2))
             val slRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
             slRow.addView(line("Stop loss: ", MUTED, 13f))
-            slRow.addView(line("2% from market", RED, 13f, bold = true))
+            slRow.addView(line("—", MUTED, 13f))
             card.addView(slRow)
         }
         val regime = s.optString("market_regime")
@@ -730,7 +727,7 @@ class MainActivity : AppCompatActivity() {
         }
         val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN) ?: Double.NaN
         if (!sl.isNaN() && sl > 0) priceRow("Stop loss", fmt(sl), RED)
-        else priceRow("Stop loss", "2% from market", RED)
+        else priceRow("Stop loss", "—", MUTED)
         val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN) ?: Double.NaN
         if (!tp.isNaN() && tp > 0) priceRow("Target", fmt(tp), GREEN)
 
@@ -814,8 +811,10 @@ class MainActivity : AppCompatActivity() {
                     if (history != null) {
                         for (i in 0 until history.length()) {
                             val t = history.getJSONObject(i)
-                            if (!t.has("pnl")) continue
-                            val pnlT = t.optDouble("pnl", 0.0)
+                            // pnlQuote is the actual field; fall back to pnl for compat
+                            val pnlT = if (t.has("pnlQuote")) t.optDouble("pnlQuote", 0.0)
+                                       else t.optDouble("pnl", 0.0)
+                            if (!t.has("pnlQuote") && !t.has("pnl")) continue
                             val grade = t.optString("grade", "")
                             total++; if (pnlT > 0) wins++
                             if (grade == "NORMAL") {
@@ -833,18 +832,20 @@ class MainActivity : AppCompatActivity() {
                     }
                     winRateText.text = "Win rate: $winRateStr"
                     winRateText.setTextColor(Color.parseColor(if (total > 0) WHITE else MUTED))
-                    // Separate rates
+                    // Separate win/loss rates per tier
                     if (normalTotal > 0) {
-                        val pct = (normalWins * 100.0 / normalTotal).toInt()
-                        winRateNormalText.text = "Normal (65-80): $pct% ($normalWins/$normalTotal)"
+                        val wPct = (normalWins * 100.0 / normalTotal).toInt()
+                        val lPct = 100 - wPct
+                        winRateNormalText.text = "Normal (65-80): W $wPct% / L $lPct% ($normalWins/${normalTotal - normalWins}/$normalTotal)"
                         winRateNormalText.setTextColor(Color.parseColor(WHITE))
                     } else {
                         winRateNormalText.text = "Normal (65-80): —"
                         winRateNormalText.setTextColor(Color.parseColor(MUTED))
                     }
                     if (goodTotal > 0) {
-                        val pct = (goodWins * 100.0 / goodTotal).toInt()
-                        winRateGoodText.text = "Good (85+): $pct% ($goodWins/$goodTotal)"
+                        val wPct = (goodWins * 100.0 / goodTotal).toInt()
+                        val lPct = 100 - wPct
+                        winRateGoodText.text = "Good (85+): W $wPct% / L $lPct% ($goodWins/${goodTotal - goodWins}/$goodTotal)"
                         winRateGoodText.setTextColor(Color.parseColor(WHITE))
                     } else {
                         winRateGoodText.text = "Good (85+): —"
