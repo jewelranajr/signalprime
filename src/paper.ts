@@ -306,6 +306,79 @@ export class PaperTrader {
       this.states.delete(id);
     }
   }
+
+  /**
+   * Restore account state from a paper-report.json file (written by printReport).
+   * Called at startup so Render restarts don't wipe positions/history.
+   * Returns true if state was loaded, false if no valid report found.
+   */
+  hydrateFromReport(reportPath: string): boolean {
+    try {
+      const fs = require('node:fs') as typeof import('node:fs');
+      if (!fs.existsSync(reportPath)) return false;
+      const raw = fs.readFileSync(reportPath, 'utf8');
+      const data = JSON.parse(raw) as {
+        account?: {
+          balance?: number;
+          realizedPnl?: number;
+          totalFees?: number;
+          totalFunding?: number;
+          openPositions?: PaperPosition[];
+          tradeHistory?: BacktestTrade[];
+        };
+      };
+      const acct = data.account;
+      if (!acct || typeof acct.balance !== 'number') return false;
+
+      this.balance = acct.balance;
+      this.realizedPnl = acct.realizedPnl ?? 0;
+      this.totalFees = acct.totalFees ?? 0;
+      this.totalFunding = acct.totalFunding ?? 0;
+
+      // Restore trade history
+      if (Array.isArray(acct.tradeHistory)) {
+        for (const t of acct.tradeHistory) {
+          this.tradeHistory.push(t);
+        }
+      }
+
+      // Restore open positions with reconstructed state
+      if (Array.isArray(acct.openPositions)) {
+        for (const pos of acct.openPositions) {
+          if (!pos.id || !pos.symbol) continue;
+          this.positions.set(pos.id, { ...pos });
+          // Reconstruct minimal state; grade defaults to 'A' if unknown
+          // (grade is tracked in tradeHistory on close, so this only affects
+          // in-flight display, not final stats)
+          this.states.set(pos.id, {
+            grade: 'A',
+            origQty: pos.quantity,
+            remainingQty: pos.quantity,
+            tpHit: [false, false, false],
+            realizedNet: -pos.fees,
+            feesPaid: pos.fees,
+            lastPrice: pos.entry,
+            nextFundingMs: Date.now() + FUNDING_INTERVAL_MS,
+          });
+          // Keep idSeq ahead to avoid ID collisions
+          const seqMatch = pos.id.match(/-(\d+)$/);
+          if (seqMatch) {
+            const seq = parseInt(seqMatch[1], 10);
+            if (seq >= this.idSeq) this.idSeq = seq;
+          }
+        }
+      }
+
+      console.log(
+        `hydrated paper state: balance=${this.balance.toFixed(2)} ` +
+        `positions=${this.positions.size} history=${this.tradeHistory.length}`
+      );
+      return true;
+    } catch (err) {
+      console.log(`hydrate failed (starting fresh): ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
+  }
 }
 
 /**

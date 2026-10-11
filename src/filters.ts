@@ -634,6 +634,29 @@ export class CooldownTracker {
     return n;
   }
 
+  /** Serialize cooldown state for persistence across restarts. */
+  serialize(): Array<{ symbol: string; time: number; direction: Direction; regime: MarketRegime }> {
+    return [...this.emissions.entries()].map(([symbol, rec]) => ({
+      symbol,
+      time: rec.time,
+      direction: rec.direction,
+      regime: rec.regime,
+    }));
+  }
+
+  /** Restore cooldown state from serialized data. */
+  deserialize(data: Array<{ symbol: string; time: number; direction: Direction; regime: MarketRegime }>): void {
+    if (!Array.isArray(data)) return;
+    for (const item of data) {
+      if (!item.symbol || !item.time) continue;
+      this.emissions.set(item.symbol, {
+        time: item.time,
+        direction: item.direction,
+        regime: item.regime,
+      });
+    }
+  }
+
   private observeRegime(regime: MarketRegime, t: number): void {
     if (regime !== this.globalRegime) {
       this.previousRegime = this.globalRegime;

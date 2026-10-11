@@ -11,8 +11,10 @@
  *      all 500 pairs every 5 cycles while staying inside Binance rate limits.
  *      With --symbols-file PATH, loads a fixed symbol list once from a JSON
  *      file ({symbols:[...]} or [...]) and rotates through it — no re-fetch.
- *   3. Opens virtual positions from ACTIVE A+/A signals only
- *      (PaperTrader also enforces this + one position per symbol).
+ *   3. Opens virtual positions from ACTIVE A+/A/NORMAL signals
+ *      (PaperTrader re-validates grade + one position per symbol).
+ *      NORMAL opens only when the engine marked it ACTIVE (score 75+);
+ *      grades are recorded per trade for separate Normal vs Good tracking.
  *   4. Settles open positions against fresh closed 15m candles
  *      (conservative stop-before-TP ordering, fees, slippage, funding).
  *   5. Prints an account summary and writes paper-report.json.
@@ -165,7 +167,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function printReport(trader: PaperTrader, cycle: number): void {
+function printReport(trader: PaperTrader, cycle: number, cooldowns?: CooldownTracker): void {
   const a = trader.account;
   const closed = a.tradeHistory;
   const wins = closed.filter((t) => t.pnlQuote > 0).length;
@@ -202,6 +204,7 @@ function printReport(trader: PaperTrader, cycle: number): void {
       openPositions: a.positions,
       tradeHistory: a.tradeHistory,
     },
+    cooldowns: cooldowns?.serialize() ?? [],
     note: 'Virtual money. Past simulation does not predict future results.',
   };
   fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
@@ -220,6 +223,23 @@ async function main(): Promise<void> {
   const client = new BinanceDataClient(config);
   const cooldowns = new CooldownTracker(config);
   const trader = new PaperTrader(config);
+
+  // Restore previous session state so Render restarts don't wipe the ledger.
+  const hydrated = trader.hydrateFromReport(REPORT_PATH);
+  if (!hydrated) {
+    console.log('no previous paper state found; starting fresh.');
+  } else {
+    // Restore cooldowns to prevent duplicate entries after restart
+    try {
+      const fs = require('node:fs') as typeof import('node:fs');
+      const raw = fs.readFileSync(REPORT_PATH, 'utf8');
+      const data = JSON.parse(raw) as { cooldowns?: Array<{ symbol: string; time: number; direction: 'LONG' | 'SHORT' | 'NO_TRADE'; regime: import('../types').MarketRegime }> };
+      if (data.cooldowns) {
+        cooldowns.deserialize(data.cooldowns);
+        console.log(`restored ${data.cooldowns.length} cooldown records`);
+      }
+    } catch { /* non-fatal */ }
+  }
 
   // Fixed universe from file: loaded once, never re-fetched.
   let fileUniverse: string[] | null = null;
@@ -255,7 +275,7 @@ async function main(): Promise<void> {
     if (stop) return;
     stop = true;
     console.log('\nShutting down — final report:');
-    printReport(trader, cycle);
+    printReport(trader, cycle, cooldowns);
   };
   let cycle = 0;
   let rotationOffset = 0;
@@ -301,7 +321,8 @@ async function main(): Promise<void> {
       // 1b. Manual intents from the mobile/API client (virtual money only).
       await processPaperIntents(client, trader);
 
-      // 2+3. Scan symbols, open A+/A signals.
+      // 2+3. Scan symbols, open A+/A/NORMAL signals.
+      // NORMAL only reaches here with ACTIVE status (engine gates <75 itself).
       const allSignals: MasterSignal[] = [];
       for (const symbol of symbols) {
         if (stop) break;
@@ -331,7 +352,9 @@ async function main(): Promise<void> {
             `conf=${signal.confidence} regime=${signal.market_regime}`,
         );
         if (signal.direction === 'NO_TRADE' || signal.status !== 'ACTIVE') continue;
-        if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A') continue;
+        // A+/A always; NORMAL only when engine emitted it ACTIVE (score 75+,
+        // user threshold — the 65-75 NORMAL band stays display-only NO_TRADE).
+        if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A' && signal.signal_grade !== 'NORMAL') continue;
         const gate = cooldowns.canEmit(symbol, signal.direction, signal.market_regime);
         if (!gate.ok) {
           console.log(`  cooldown: ${gate.reason}`);
@@ -366,7 +389,7 @@ async function main(): Promise<void> {
       trader.accrueFunding(Date.now());
 
       // 5. Report.
-      printReport(trader, cycle);
+      printReport(trader, cycle, cooldowns);
     } catch (err) {
       console.error(`cycle #${cycle} error: ${err instanceof Error ? err.message : err}`);
     }
@@ -374,7 +397,7 @@ async function main(): Promise<void> {
       await sleep(everyMin * 60_000);
     }
   }
-  printReport(trader, cycle);
+  printReport(trader, cycle, cooldowns);
 }
 
 main().catch((err) => {
