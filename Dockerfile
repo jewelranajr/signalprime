@@ -17,5 +17,6 @@ EXPOSE 8080
 
 # Run paper runner (background) + API server (foreground).
 # Paper state lives in paper-report.json; it regenerates every cycle.
-# Paper state lives in paper-report.json; it regenerates every cycle.
-CMD ["sh", "-c", "node dist/scripts/paper-run.js --symbols-file top500.json --batch 100 --every-min 15 >> paper-trading.log 2>&1 & exec node dist/index.js"]
+# Force redeploy 2026-10-11: restart stuck paper runner (cycle 4, 12h stale)
+# 5-min cycles to catch NORMAL signals faster (user requested).
+CMD ["sh", "-c", "node dist/scripts/paper-run.js --symbols-file top500.json --batch 100 --every-min 5 >> paper-trading.log 2>&1 & exec node dist/index.js"]
