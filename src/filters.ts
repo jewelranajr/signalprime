@@ -548,6 +548,12 @@ interface EmissionRecord {
   regime: MarketRegime;
 }
 
+/** One post-stop-loss cooldown entry: symbol+direction blocked until time + postSlCooldownMs. */
+interface SlCooldownRecord {
+  direction: Direction;
+  time: number;
+}
+
 /**
  * Anti-overtrading cooldown tracker.
  *
@@ -555,6 +561,11 @@ interface EmissionRecord {
  *   config.cooldownMs ('Signal cooldown active').
  * - Per-symbol same-direction: blocks the same direction for a symbol within
  *   config.sameDirectionCooldownMs ('Same-direction cooldown').
+ * - Post-stop-loss: after a position closes at SL, recordStopLoss() blocks
+ *   re-entering the same symbol+direction for config.postSlCooldownMs
+ *   ('Post-SL cooldown'). An SL exit means the setup failed; re-entering
+ *   the same direction minutes later on a fresh signal is how a single
+ *   bad setup turns into a loop of repeated losses.
  * - Global regime shift: when the market regime changes (observed via
  *   canEmit's regime argument or a recorded signal), emissions whose
  *   direction aligns with the OLD regime are blocked for
@@ -568,6 +579,7 @@ interface EmissionRecord {
 export class CooldownTracker {
   private readonly config: EngineConfig;
   private readonly emissions = new Map<string, EmissionRecord>();
+  private readonly slCooldowns = new Map<string, SlCooldownRecord>();
   private globalRegime: MarketRegime = 'SIDEWAYS';
   private previousRegime: MarketRegime | null = null;
   private lastRegimeShiftAt: number | null = null;
@@ -600,6 +612,15 @@ export class CooldownTracker {
       }
     }
 
+    // Post-stop-loss cooldown: same symbol + same direction blocked.
+    const sl = this.slCooldowns.get(`${symbol}:${direction}`);
+    if (sl) {
+      const elapsed = Math.max(0, t - sl.time);
+      if (elapsed < this.config.postSlCooldownMs) {
+        return { ok: false, reason: 'Post-SL cooldown (24h)' };
+      }
+    }
+
     if (
       this.previousRegime !== null &&
       this.lastRegimeShiftAt !== null &&
@@ -621,6 +642,18 @@ export class CooldownTracker {
       regime: signal.market_regime,
     });
     this.observeRegime(signal.market_regime, t);
+    this.prune(t);
+  }
+
+  /**
+   * Record a stop-loss exit: block re-entering this symbol+direction for
+   * config.postSlCooldownMs. Only SL exits call this — TP and manual
+   * closes do not (a manual close is the user's choice, not a failed setup).
+   */
+  recordStopLoss(symbol: string, direction: Direction, time?: number): void {
+    const t = Number.isFinite(time) ? (time as number) : Date.now();
+    if (!symbol || (direction !== 'LONG' && direction !== 'SHORT')) return;
+    this.slCooldowns.set(`${symbol}:${direction}`, { direction, time: t });
     this.prune(t);
   }
 
@@ -657,6 +690,29 @@ export class CooldownTracker {
     }
   }
 
+  /** Serialize post-SL cooldown state for persistence across restarts. */
+  serializeSlCooldowns(): Array<{ symbol: string; direction: Direction; time: number }> {
+    return [...this.slCooldowns.entries()].map(([key, rec]) => {
+      const symbol = key.slice(0, key.lastIndexOf(':'));
+      return { symbol, direction: rec.direction, time: rec.time };
+    });
+  }
+
+  /** Restore post-SL cooldown state from serialized data. */
+  deserializeSlCooldowns(
+    data: Array<{ symbol: string; direction: Direction; time: number }>,
+  ): void {
+    if (!Array.isArray(data)) return;
+    for (const item of data) {
+      if (!item.symbol || !item.time) continue;
+      if (item.direction !== 'LONG' && item.direction !== 'SHORT') continue;
+      this.slCooldowns.set(`${item.symbol}:${item.direction}`, {
+        direction: item.direction,
+        time: item.time,
+      });
+    }
+  }
+
   private observeRegime(regime: MarketRegime, t: number): void {
     if (regime !== this.globalRegime) {
       this.previousRegime = this.globalRegime;
@@ -668,6 +724,9 @@ export class CooldownTracker {
   private prune(t: number): void {
     for (const [symbol, e] of this.emissions) {
       if (t - e.time > PRUNE_AFTER_MS) this.emissions.delete(symbol);
+    }
+    for (const [key, e] of this.slCooldowns) {
+      if (t - e.time > this.config.postSlCooldownMs) this.slCooldowns.delete(key);
     }
   }
 }

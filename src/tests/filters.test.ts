@@ -129,6 +129,33 @@ describe('filters', () => {
     assert.equal(later.ok, true, 'cooldown expires');
   });
 
+  it('CooldownTracker post-SL cooldown blocks same symbol+direction for 24h', () => {
+    const cfg = strictConfig();
+    const t = new CooldownTracker(cfg);
+    const now = Date.now();
+    t.recordStopLoss('PROVEUSDT', 'SHORT', now);
+    const blocked = t.canEmit('PROVEUSDT', 'SHORT', 'WEAK_BEAR', now + 1000);
+    assert.equal(blocked.ok, false, 'same symbol+direction blocked after SL');
+    assert.ok(/Post-SL/.test(blocked.reason ?? ''), 'reason names post-SL cooldown');
+    const opposite = t.canEmit('PROVEUSDT', 'LONG', 'WEAK_BULL', now + 1000);
+    assert.equal(opposite.ok, true, 'opposite direction unaffected');
+    const other = t.canEmit('BTCUSDT', 'SHORT', 'WEAK_BEAR', now + 1000);
+    assert.equal(other.ok, true, 'other symbols unaffected');
+    const later = t.canEmit('PROVEUSDT', 'SHORT', 'WEAK_BEAR', now + cfg.postSlCooldownMs + 1000);
+    assert.equal(later.ok, true, 'post-SL cooldown expires after 24h');
+  });
+
+  it('CooldownTracker post-SL cooldown survives serialize/deserialize', () => {
+    const cfg = strictConfig();
+    const t = new CooldownTracker(cfg);
+    const now = Date.now();
+    t.recordStopLoss('PROVEUSDT', 'SHORT', now);
+    const t2 = new CooldownTracker(cfg);
+    t2.deserializeSlCooldowns(t.serializeSlCooldowns());
+    const blocked = t2.canEmit('PROVEUSDT', 'SHORT', 'WEAK_BEAR', now + 1000);
+    assert.equal(blocked.ok, false, 'restored post-SL cooldown blocks');
+  });
+
   it('correlationScore is the same-direction share', () => {
     assert.equal(correlationScore(0, 0), 0);
     assert.equal(correlationScore(3, 4), 75);

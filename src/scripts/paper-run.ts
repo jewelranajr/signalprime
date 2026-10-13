@@ -228,6 +228,7 @@ function printReport(trader: PaperTrader, cycle: number, cooldowns?: CooldownTra
       tradeHistory: a.tradeHistory,
     },
     cooldowns: cooldowns?.serialize() ?? [],
+    slCooldowns: cooldowns?.serializeSlCooldowns() ?? [],
     note: 'Virtual money. Past simulation does not predict future results.',
   };
   fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
@@ -256,10 +257,14 @@ async function main(): Promise<void> {
     try {
       const fs = require('node:fs') as typeof import('node:fs');
       const raw = fs.readFileSync(REPORT_PATH, 'utf8');
-      const data = JSON.parse(raw) as { cooldowns?: Array<{ symbol: string; time: number; direction: 'LONG' | 'SHORT' | 'NO_TRADE'; regime: import('../types').MarketRegime }> };
+      const data = JSON.parse(raw) as { cooldowns?: Array<{ symbol: string; time: number; direction: 'LONG' | 'SHORT' | 'NO_TRADE'; regime: import('../types').MarketRegime }>; slCooldowns?: Array<{ symbol: string; direction: 'LONG' | 'SHORT'; time: number }> };
       if (data.cooldowns) {
         cooldowns.deserialize(data.cooldowns);
         console.log(`restored ${data.cooldowns.length} cooldown records`);
+      }
+      if (data.slCooldowns) {
+        cooldowns.deserializeSlCooldowns(data.slCooldowns);
+        console.log(`restored ${data.slCooldowns.length} post-SL cooldown records`);
       }
     } catch { /* non-fatal */ }
   }
@@ -302,6 +307,13 @@ async function main(): Promise<void> {
   };
   let cycle = 0;
   let rotationOffset = 0;
+  // Entry confirmation: symbol -> first-seen ACTIVE signal awaiting one
+  // confirming cycle. A signal must survive a second consecutive cycle
+  // with the same direction before the runner opens it — one fresh
+  // 15m candle must confirm the setup instead of entering on first sight.
+  // In-memory only: a restart simply requires the signal to be seen twice
+  // again (fail-safe, no stale pending state).
+  const pendingConfirmations = new Map<string, { direction: 'LONG' | 'SHORT'; cycle: number }>();
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
@@ -354,9 +366,11 @@ async function main(): Promise<void> {
       for (const symbol of symbols) {
         if (stop) break;
         let signal: MasterSignal;
+        let ticker: { quoteVolume: number; priceChangePct: number; lastPrice: number } | undefined;
         try {
           const candles = await client.getMultiTimeframe(symbol);
           const t = tickerMap.get(symbol);
+          ticker = t;
           signal = buildSignal(
             {
               symbol,
@@ -376,15 +390,51 @@ async function main(): Promise<void> {
             `long=${fmt(signal.long_score, 1)} short=${fmt(signal.short_score, 1)} ` +
             `conf=${signal.confidence} regime=${signal.market_regime}`,
         );
-        if (signal.direction === 'NO_TRADE' || signal.status !== 'ACTIVE') continue;
+        if (signal.direction === 'NO_TRADE' || signal.status !== 'ACTIVE') {
+          // Signal lost/flipped: a pending confirmation no longer applies.
+          if (pendingConfirmations.has(symbol)) pendingConfirmations.delete(symbol);
+          continue;
+        }
         // A+/A always; NORMAL only when engine emitted it ACTIVE (score 80+,
         // user threshold — the 65-80 NORMAL band stays display-only NO_TRADE).
         if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A' && signal.signal_grade !== 'NORMAL') continue;
+        // Volume gate: skip thin markets for paper entry (unreliable signals).
+        const quoteVol = ticker?.quoteVolume ?? 0;
+        if (!(quoteVol >= config.paperMinQuoteVolume24h)) {
+          console.log(`  volume: ${symbol} 24h quote volume ${fmt(quoteVol, 0)} below paper minimum ${config.paperMinQuoteVolume24h} — skipped`);
+          continue;
+        }
+        // Choppy-regime gate: NORMAL (lower-conviction) signals are skipped
+        // in SIDEWAYS / LOW_VOLATILITY regimes — the worst chop. A+/A
+        // signals passed strict gates and are still allowed (mean-reversion
+        // setups can work in ranging markets when conviction is high).
+        if (
+          config.paperBlockNormalInChop &&
+          signal.signal_grade === 'NORMAL' &&
+          (signal.market_regime === 'SIDEWAYS' || signal.market_regime === 'LOW_VOLATILITY')
+        ) {
+          console.log(`  choppy regime: ${signal.market_regime} — NORMAL signal skipped`);
+          continue;
+        }
         const gate = cooldowns.canEmit(symbol, signal.direction, signal.market_regime);
         if (!gate.ok) {
           console.log(`  cooldown: ${gate.reason}`);
           continue;
         }
+        // Entry confirmation: first sighting only records the signal; the
+        // open happens on the next cycle if the same direction is still
+        // ACTIVE (one confirming candle). A flipped/lost signal clears it.
+        const pending = pendingConfirmations.get(symbol);
+        if (!pending || pending.direction !== signal.direction) {
+          pendingConfirmations.set(symbol, { direction: signal.direction, cycle });
+          console.log(`  awaiting confirmation: ${signal.direction} ${symbol} first seen cycle #${cycle}`);
+          continue;
+        }
+        if (pending.cycle >= cycle) {
+          // Same-cycle re-sight (should not happen); wait for next cycle.
+          continue;
+        }
+        pendingConfirmations.delete(symbol);
         const opened = trader.openFromSignal(signal);
         if (opened.id) {
           cooldowns.record(signal);
@@ -406,12 +456,23 @@ async function main(): Promise<void> {
       } catch { /* non-fatal */ }
 
       // 4. Settle open positions on fresh closed 15m candles.
+      const historyBefore = trader.account.tradeHistory.length;
       const openSymbols = [...new Set(trader.account.positions.map((p) => p.symbol))];
       for (const symbol of openSymbols) {
         const klines = await client.getKlines(symbol, '15m', 96);
         for (const c of klines) trader.onCandle(symbol, c);
       }
       trader.accrueFunding(Date.now());
+      // Post-SL cooldown: any trade that closed at SL this cycle blocks
+      // re-entry of the same symbol+direction for 24h (breaks re-entry
+      // loops — one failed setup must not reopen minutes later).
+      const newTrades = trader.account.tradeHistory.slice(historyBefore);
+      for (const t of newTrades) {
+        if (t.exitReason === 'SL') {
+          cooldowns.recordStopLoss(t.symbol, t.direction, t.exitTime);
+          console.log(`  post-SL cooldown: ${t.direction} ${t.symbol} blocked 24h`);
+        }
+      }
 
       // 5. Report.
       printReport(trader, cycle, cooldowns);

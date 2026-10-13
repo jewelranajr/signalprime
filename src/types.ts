@@ -247,9 +247,15 @@ export interface EngineConfig {
   cooldownMs: number;
   sameDirectionCooldownMs: number;
   regimeCooldownMs: number;
+  // Post-stop-loss cooldown: after an SL exit, the same symbol+direction
+  // cannot be re-entered for this long (breaks re-entry loops).
+  postSlCooldownMs: number;
   // Liquidity filter
   maxSpreadPct: number;
   minQuoteVolume24h: number;
+  // Paper-trading entry gates (runner only, not engine scoring)
+  paperMinQuoteVolume24h: number;
+  paperBlockNormalInChop: boolean;
   // Exchange data layer
   binanceBaseUrls: string[];
   requestTimeoutMs: number;

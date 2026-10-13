@@ -50,9 +50,15 @@ export function loadConfig(): EngineConfig {
     cooldownMs: num('COOLDOWN_MS', 900_000),
     sameDirectionCooldownMs: num('SAME_DIRECTION_COOLDOWN_MS', 1_800_000),
     regimeCooldownMs: num('REGIME_COOLDOWN_MS', 3_600_000),
+    // Post-stop-loss cooldown: 24h block on re-entering the same
+    // symbol+direction after an SL exit (breaks re-entry loops).
+    postSlCooldownMs: num('POST_SL_COOLDOWN_MS', 24 * 3600 * 1000),
     // Liquidity filter
     maxSpreadPct: num('MAX_SPREAD_PCT', 0.15),
     minQuoteVolume24h: num('MIN_QUOTE_VOLUME_24H', 1_000_000),
+    // Paper-trading entry gates (runner only, not engine scoring)
+    paperMinQuoteVolume24h: num('PAPER_MIN_QUOTE_VOLUME_24H', 500_000),
+    paperBlockNormalInChop: bool('PAPER_BLOCK_NORMAL_IN_CHOP', true),
     // Exchange data layer
     binanceBaseUrls: str(
       'BINANCE_BASE_URLS',
@@ -99,6 +105,9 @@ export function publicConfig(config: EngineConfig): Record<string, number | stri
     signalTtlMs: config.signalTtlMs,
     maxSpreadPct: config.maxSpreadPct,
     minQuoteVolume24h: config.minQuoteVolume24h,
+    postSlCooldownMs: config.postSlCooldownMs,
+    paperMinQuoteVolume24h: config.paperMinQuoteVolume24h,
+    paperBlockNormalInChop: config.paperBlockNormalInChop,
     objective: 'maximum validated signal quality with strict NO_TRADE protection and controlled risk',
   };
 }
