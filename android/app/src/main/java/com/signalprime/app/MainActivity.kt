@@ -858,8 +858,18 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         paperBox.addView(line("${positions.length()} open position(s)", MUTED, 12f))
                         paperBox.addView(spacer(4))
+                        // Fetch live prices for unrealized PnL per position (off UI thread)
+                        val syms = mutableListOf<String>()
                         for (i in 0 until positions.length()) {
-                            paperBox.addView(positionRow(positions.getJSONObject(i)))
+                            syms.add(positions.getJSONObject(i).optString("symbol"))
+                        }
+                        thread {
+                            val prices = ApiClient.binancePrices(syms)
+                            runOnUiThread {
+                                for (i in 0 until positions.length()) {
+                                    paperBox.addView(positionRow(positions.getJSONObject(i), prices))
+                                }
+                            }
                         }
                     }
                 }
@@ -869,7 +879,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun positionRow(p: JSONObject): View {
+    private fun positionRow(p: JSONObject, prices: Map<String, Double> = emptyMap()): View {
         val card = innerCard()
         val dir = p.optString("direction")
         val dirColor = if (dir == "LONG") GREEN else RED
@@ -892,6 +902,24 @@ class MainActivity : AppCompatActivity() {
             "SL ${p.optDouble("stopLoss")}  •  TP ${p.optDouble("takeProfit")}",
             "#5b6577", 12f
         ))
+        // Unrealized PnL from live price (green = profit, red = loss)
+        val cur = prices[p.optString("symbol")]
+        if (cur != null && cur > 0) {
+            val entry = p.optDouble("entry")
+            val qty = p.optDouble("quantity")
+            val pnl = if (dir == "LONG") (cur - entry) * qty else (entry - cur) * qty
+            val pnlPct = if (entry != 0.0) {
+                val pct = if (dir == "LONG") (cur - entry) / entry * 100 else (entry - cur) / entry * 100
+                pct
+            } else 0.0
+            val pnlColor = if (pnl >= 0) GREEN else RED
+            val sign = if (pnl >= 0) "+" else ""
+            card.addView(spacer(4))
+            card.addView(line(
+                "PnL  $sign$${fmt(pnl)}  ($sign${String.format("%.2f", pnlPct)}%)  •  Now ${fmt(cur)}",
+                pnlColor, 14f, bold = true
+            ))
+        }
         card.addView(spacer(8))
         val closeBtn = styledButton("CLOSE POSITION", outlined = true).apply {
             setTextColor(Color.parseColor(RED))

@@ -60,4 +60,41 @@ object ApiClient {
 
     fun paperClose(symbol: String): JSONObject =
         post("/api/paper/close", JSONObject().put("symbol", symbol))
+
+    // ---- Binance public price (for per-position unrealized PnL) ----
+
+    /**
+     * Fetch current spot prices for the given symbols from Binance public API.
+     * Tries api.binance.com first, falls back to data-api.binance.vision (geo-block workaround).
+     * Returns map symbol -> price. Symbols with no price are omitted.
+     */
+    fun binancePrices(symbols: List<String>): Map<String, Double> {
+        if (symbols.isEmpty()) return emptyMap()
+        val encoded = symbols.joinToString(",") { "%22$it%22" }
+        val path = "/api/v3/ticker/price?symbols=[$encoded]"
+        for (host in listOf("https://api.binance.com", "https://data-api.binance.vision")) {
+            try {
+                val url = URL(host + path)
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 10000
+                    readTimeout = 15000
+                }
+                val code = conn.responseCode
+                if (code !in 200..299) { conn.disconnect(); continue }
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val arr = org.json.JSONArray(text)
+                val out = mutableMapOf<String, Double>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    out[o.optString("symbol")] = o.optDouble("price", Double.NaN)
+                }
+                return out.filterValues { !it.isNaN() }
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        return emptyMap()
+    }
 }
