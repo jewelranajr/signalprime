@@ -36,9 +36,10 @@ export function loadConfig(): EngineConfig {
     aPlusScore: num('A_PLUS_SCORE', 92),
     aPlusConfidence: num('A_PLUS_CONFIDENCE', 88),
     aPlusRR: num('A_PLUS_RR', 2.5),
-    // NORMAL tier (65-80): lower-quality signals, tracked separately
+    // NORMAL tier (65-84): lower-quality signals, tracked separately.
+    // Paper entry still requires 80+ (user threshold); 65-79 stay display-only.
     normalMinScore: num('NORMAL_MIN_SCORE', 65),
-    normalMaxScore: num('NORMAL_MAX_SCORE', 80),
+    normalMaxScore: num('NORMAL_MAX_SCORE', 84),
     // Risk
     accountBalance: num('ACCOUNT_BALANCE', 10_000),
     riskPercent: num('RISK_PERCENT', 1),

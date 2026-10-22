@@ -402,6 +402,13 @@ export interface MasterSignal {
   invalidation: string[];
   correlation_score: number; // 0..100 portfolio correlation exposure
   ai_rating: AIRating;
+  /**
+   * Phase 2 WATCH (display-only): set only on NO_TRADE signals that show a
+   * developing-move signature (>=2 early-move triggers) but fail entry gates.
+   * NEVER executable — direction stays NO_TRADE, status stays WAITING, and the
+   * paper runner skips anything that is not ACTIVE. Null when not watching.
+   */
+  watch: { triggers: string[] } | null;
   created_at: string;
   expires_at: string;
 }

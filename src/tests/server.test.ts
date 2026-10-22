@@ -170,4 +170,47 @@ describe('server', () => {
       else if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
     }
   });
+
+  it('/api/signals?diag=1 exposes full-scanner diagnostics; default omits them', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const cachePath = path.join(process.cwd(), 'signals-cache.json');
+    const hadCache = fs.existsSync(cachePath);
+    const backup = hadCache ? fs.readFileSync(cachePath, 'utf8') : null;
+    try {
+      const sig = (sym: string): Record<string, unknown> => ({
+        signal_id: 't', symbol: sym, direction: 'NO_TRADE', status: 'WAITING',
+        signal_grade: 'NO_TRADE', long_score: 10, short_score: 20, confidence: 0,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 900_000).toISOString(),
+      });
+      const diagRow = (sym: string): Record<string, unknown> => ({
+        symbol: sym, ok: true, long_score: 10, short_score: 20,
+        direction: 'NO_TRADE', status: 'WAITING', grade: 'NO_TRADE',
+        regime: 'SIDEWAYS', watch: false, gate: 'score<minScore',
+      });
+      fs.writeFileSync(cachePath, JSON.stringify({
+        generatedAt: new Date().toISOString(), count: 150,
+        signals: [sig('AUSDT')],
+        diagnostics: [diagRow('AUSDT'), diagRow('BUSDT')],
+      }));
+      const app = await buildApp(testDeps());
+      // Default: no diagnostics key (contract unchanged).
+      const res = await app.inject({ method: 'GET', url: '/api/signals?limit=20' });
+      assert.equal(res.statusCode, 200);
+      const body = res.json() as { diagnostics?: unknown[]; diag_count?: number };
+      assert.equal(body.diagnostics, undefined);
+      assert.equal(body.diag_count, undefined);
+      // diag=1: full diagnostics included.
+      const res2 = await app.inject({ method: 'GET', url: '/api/signals?limit=20&diag=1' });
+      await app.close();
+      assert.equal(res2.statusCode, 200);
+      const body2 = res2.json() as { diagnostics: { symbol: string }[]; diag_count: number };
+      assert.equal(body2.diag_count, 2);
+      assert.deepEqual(body2.diagnostics.map((d) => d.symbol), ['AUSDT', 'BUSDT']);
+    } finally {
+      if (backup !== null) fs.writeFileSync(cachePath, backup);
+      else if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+    }
+  });
 });

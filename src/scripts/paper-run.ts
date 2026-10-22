@@ -420,6 +420,7 @@ async function main(): Promise<void> {
       let fetchFailed = 0;
       let nActive = 0;
       let nWaiting = 0;
+      let nWatch = 0; // Phase 2: display-only WATCH notices (never executable)
       for (const a of analyzed) {
         if (!a.signal) { fetchFailed++; continue; }
         const symbol = a.symbol;
@@ -437,6 +438,7 @@ async function main(): Promise<void> {
           if (signal.direction === 'NO_TRADE') {
             const b = gateBucket(signal.reasons[0] ?? 'unknown');
             gateCounts.set(b, (gateCounts.get(b) ?? 0) + 1);
+            if (signal.watch) nWatch++;
           } else {
             nWaiting++;
             console.log(`  waiting: ${signal.reasons[0] ?? 'n/a'}`);
@@ -497,7 +499,7 @@ async function main(): Promise<void> {
       const scanMs = Date.now() - scanT0;
       console.log(
         `scan done: ${symbols.length} coins, ${fetchFailed} failed, ` +
-          `${nActive} ACTIVE, ${nWaiting} WAITING in ${(scanMs / 1000).toFixed(1)}s (pool=${poolSize})`,
+          `${nActive} ACTIVE, ${nWaiting} WAITING, ${nWatch} WATCH in ${(scanMs / 1000).toFixed(1)}s (pool=${poolSize})`,
       );
       if (gateCounts.size > 0) {
         const top = [...gateCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
@@ -514,6 +516,25 @@ async function main(): Promise<void> {
         if (allSignals.length === 0 && fs.existsSync(SIGNALS_CACHE_PATH)) {
           console.log('scan produced no analyzable symbols; retaining previous signals cache');
         } else {
+          // Full-scanner diagnostics: lightweight per-symbol rows for ALL analyzed
+      // symbols (not just the top 50), so /api/signals?diag=1 can expose what
+      // the top-50 cut hides. Additive — the existing signals array is untouched.
+      const diagnostics = analyzed.map((a) => {
+        const s = a.signal;
+        if (!s) return { symbol: a.symbol, ok: false, error: 'fetch/analysis failed' };
+        return {
+          symbol: a.symbol,
+          ok: true,
+          long_score: Math.round(s.long_score * 10) / 10,
+          short_score: Math.round(s.short_score * 10) / 10,
+          direction: s.direction,
+          status: s.status,
+          grade: s.signal_grade,
+          regime: s.market_regime,
+          watch: !!s.watch,
+          gate: s.direction === 'NO_TRADE' ? gateBucket(s.reasons[0] ?? 'unknown') : 'passed',
+        };
+      });
           const tmpPath = SIGNALS_CACHE_PATH + '.tmp';
           fs.writeFileSync(tmpPath, JSON.stringify({
             generatedAt: scanCompletedAt,
@@ -521,6 +542,7 @@ async function main(): Promise<void> {
             scan_completed_at: scanCompletedAt,
             count: allSignals.length,
             signals: allSignals.slice(0, 50),
+            diagnostics,
           }));
           fs.renameSync(tmpPath, SIGNALS_CACHE_PATH);
         }

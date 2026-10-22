@@ -815,6 +815,75 @@ function probabilityEstimate(confidence: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2 WATCH detector (display-only early-move notice).
+// Flags developing moves that fail entry gates. Pure function, causal:
+// reads only bars at indices <= lastIdx. Needs >= 2 independent triggers
+// to fire, so single-bar noise never marks a WATCH.
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect early-move signatures on the primary timeframe.
+ * Returns trigger descriptions (empty when nothing is developing).
+ * Triggers: relative volume expansion, ATR expansion, momentum acceleration,
+ * Bollinger compression-then-expansion (squeeze release).
+ */
+export function detectWatchTriggers(pcs: Candle[], pind: IndicatorSet): string[] {
+  const triggers: string[] = [];
+  const n = pcs.length;
+  if (n < 61) return triggers; // need lookback windows
+  const last = n - 1;
+  const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+  // 1. Relative volume expansion: last bar >= 2x its volume SMA.
+  const volSma = pind.volumeSMA[last];
+  const lastVol = pcs[last].volume;
+  if (num(volSma) && volSma > 0 && num(lastVol) && lastVol >= 2 * volSma) {
+    triggers.push(`vol-expansion ${(lastVol / volSma).toFixed(1)}x`);
+  }
+
+  // 2. ATR expansion: current ATR >= 1.5x the mean of the prior 20 ATR readings.
+  const atrNow = pind.atr[last];
+  const atrWin = pind.atr.slice(last - 20, last).filter(num);
+  if (num(atrNow) && atrWin.length >= 15) {
+    const mean = atrWin.reduce((a, b) => a + b, 0) / atrWin.length;
+    if (mean > 0 && atrNow >= 1.5 * mean) {
+      triggers.push(`atr-expansion ${(atrNow / mean).toFixed(2)}x`);
+    }
+  }
+
+  // 3. Momentum acceleration: MACD histogram accelerating one way over the
+  //    last 3 bars (either side — direction-agnostic "move is forming").
+  const h = pind.macd.histogram;
+  const h0 = h[last];
+  const h1 = h[last - 1];
+  const h2 = h[last - 2];
+  if (num(h0) && num(h1) && num(h2)) {
+    const up = h0 > h1 && h1 > h2 && h0 > 0;
+    const dn = h0 < h1 && h1 < h2 && h0 < 0;
+    if (up || dn) triggers.push(`momentum-accel ${up ? 'bullish' : 'bearish'}`);
+  }
+
+  // 4. Compression -> expansion: bandwidth now >= 1.3x its 20-bar minimum,
+  //    where that minimum sat in the lower half of the 60-bar range (a real
+  //    squeeze, not just a locally-low reading in an already-wide band).
+  const bw = pind.bollinger.bandwidth;
+  const bwNow = bw[last];
+  const bw20 = bw.slice(last - 20, last).filter(num);
+  const bw60 = bw.slice(last - 60, last).filter(num);
+  if (num(bwNow) && bw20.length >= 15 && bw60.length >= 40) {
+    const min20 = Math.min(...bw20);
+    const min60 = Math.min(...bw60);
+    const max60 = Math.max(...bw60);
+    const squeezed = min20 <= min60 + 0.5 * (max60 - min60);
+    if (squeezed && min20 > 0 && bwNow >= 1.3 * min20) {
+      triggers.push('squeeze-release');
+    }
+  }
+
+  return triggers;
+}
+
+// ---------------------------------------------------------------------------
 // noTradeSignal — the safe default. Never forced, always available.
 // ---------------------------------------------------------------------------
 
@@ -840,6 +909,8 @@ export function noTradeSignal(
     scores?: { long: number; short: number };
     /** V2: price info for levels — engine analyzes entry/SL even for NO_TRADE. */
     priceInfo?: { close: number; atr: number };
+    /** Phase 2 WATCH: display-only early-move notice (never executable). */
+    watch?: { triggers: string[] } | null;
   },
 ): MasterSignal {
   const now = opts?.now ?? Date.now();
@@ -906,6 +977,7 @@ export function noTradeSignal(
     invalidation: [],
     correlation_score: 0,
     ai_rating: opts?.aiRating ?? 'AI_NEUTRAL',
+    watch: opts?.watch ?? null,
     created_at: new Date(now).toISOString(),
     expires_at: new Date(now + DEFAULT_COOLDOWN_MS).toISOString(),
   };
@@ -1070,14 +1142,14 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
   );
 
   // ---- 8. Candidate selection (never forced) ----
-  // V2: Two tiers — GOOD (85+) and NORMAL (65-80). NORMAL gets direction
+  // V2: Two tiers — GOOD (85+) and NORMAL (65-84). NORMAL gets direction
   // from higher score for paper trading entry at 80+.
   const shortThreshold = market.btcStrongBull
     ? config.minScore + 5 // BTC strong bull raises the bar for SHORTs
     : config.minScore;
   const longCandidate = scores.long >= config.minScore;
   const shortCandidate = scores.short >= shortThreshold;
-  // NORMAL tier candidates (65-80)
+  // NORMAL tier candidates (65-84)
   const normalLongCandidate = scores.long >= config.normalMinScore && scores.long <= config.normalMaxScore;
   const normalShortCandidate = scores.short >= config.normalMinScore && scores.short <= config.normalMaxScore;
   let direction: Direction = 'NO_TRADE';
@@ -1092,11 +1164,18 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
     isNormalTier = true;
   }
   if (direction === 'NO_TRADE') {
+    // Phase 2 WATCH: a developing move that fails entry gates is still worth
+    // displaying. Display-only: direction stays NO_TRADE, status stays WAITING,
+    // so the paper runner and order endpoint can never execute it.
+    const watchTriggers = detectWatchTriggers(pcs, pind);
+    const watch = watchTriggers.length >= 2 ? { triggers: watchTriggers } : null;
+    const noCandReason =
+      `No qualifying candidate: long ${round1(scores.long)} / short ${round1(scores.short)} below minimum score ${config.minScore}`;
     return noTradeSignal(
       input.symbol,
-      [
-        `No qualifying candidate: long ${round1(scores.long)} / short ${round1(scores.short)} below minimum score ${config.minScore}`,
-      ],
+      watch
+        ? [noCandReason, `WATCH: developing move (${watchTriggers.join(', ')}) — display only, not a trade`]
+        : [noCandReason],
       {
         mtf,
         regime,
@@ -1107,6 +1186,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
         now,
         scores: { long: scores.long, short: scores.short },
         priceInfo: { close: lastClose, atr: atrLast },
+        watch,
       },
     );
   }
@@ -1145,7 +1225,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
   }
 
   // ---- V2: NORMAL tier bypass ----
-  // NORMAL (65-80) signals skip strict AI/confidence gates.
+  // NORMAL (65-84) signals skip strict AI/confidence gates.
   // They get entry/SL from analysis and grade NORMAL for separate tracking.
   // Paper trader opens them at 80+ (user configured).
   if (isNormalTier) {
@@ -1205,6 +1285,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       invalidation: [],
       correlation_score: 0,
       ai_rating: 'AI_NEUTRAL',
+      watch: null, // WATCH only marks NO_TRADE signals
       created_at: new Date(now).toISOString(),
       expires_at: new Date(now + config.signalTtlMs).toISOString(),
     };
@@ -1429,6 +1510,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
     invalidation,
     correlation_score: 0, // server overlays portfolio correlation
     ai_rating: aiRating,
+    watch: null, // WATCH only marks NO_TRADE signals
     created_at: new Date(now).toISOString(),
     expires_at: new Date(now + config.signalTtlMs).toISOString(),
   };

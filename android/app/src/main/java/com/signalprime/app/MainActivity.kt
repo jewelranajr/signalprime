@@ -463,7 +463,10 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             // Normal: scores 65-84. The 81-84 band is paper-traded
                             // (NORMAL 80+ ACTIVE), so it must be visible here.
-                            if (bestScore < 65 || bestScore > 84) continue
+                            // WATCH (display-only developing moves, score <65)
+                            // is also shown, clearly badged.
+                            val isWatch = !s.isNull("watch")
+                            if (!isWatch && (bestScore < 65 || bestScore > 84)) continue
                         }
                         signalsBox.addView(signalRow(s, bestScore))
                         if (++shown >= 10) break
@@ -556,6 +559,14 @@ class MainActivity : AppCompatActivity() {
         }
         top.addView(sym)
         top.addView(badge(dir, dirColor))
+        // Phase 2 WATCH: display-only early-move notice — clearly badged,
+        // never an executable signal.
+        val watchObj = s.optJSONObject("watch")
+        if (watchObj != null) {
+            val wb = badge("👁 WATCH", "#38bdf8")
+            wb.setPadding(dp(10), 0, 0, 0)
+            top.addView(wb)
+        }
         // Age timer in corner
         val age = signalAge(s.optString("created_at", ""))
         if (age.isNotEmpty()) {
@@ -577,6 +588,16 @@ class MainActivity : AppCompatActivity() {
             if (reason != null) {
                 card.addView(spacer(2))
                 card.addView(line("⚠ $reason", "#fbbf24", 12f))
+            }
+        }
+        // Phase 2 WATCH triggers — display-only early-move notice.
+        if (watchObj != null) {
+            val triggers = watchObj.optJSONArray("triggers")
+            val tlist = (0 until (triggers?.length() ?: 0)).map { triggers!!.optString(it) }.filter { it.isNotBlank() }
+            if (tlist.isNotEmpty()) {
+                card.addView(spacer(2))
+                card.addView(line("👁 Developing: ${tlist.joinToString(", ")}", "#38bdf8", 12f))
+                card.addView(line("Not a trade — engine gates not met.", "#5b6577", 11f))
             }
         }
         // Signal strength below (user requested)
@@ -839,7 +860,14 @@ class MainActivity : AppCompatActivity() {
         root.addView(spacer(8))
         // Status note
         val noTradeReason = s.optJSONArray("reasons")?.optString(0, "")?.takeIf { it.isNotBlank() }
+        val detailWatch = s.optJSONObject("watch")
+        val detailTriggers = detailWatch?.optJSONArray("triggers")?.let { arr ->
+            (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+        } ?: emptyList()
         val noteText = when {
+            detailTriggers.isNotEmpty() ->
+                "👁 WATCH — developing move, display only.\n${detailTriggers.joinToString(", ")}\nNot a trade — engine gates not met." +
+                    (if (noTradeReason != null) "\n⚠ $noTradeReason" else "")
             signalMode == "NORMAL" && rawDir == "NO_TRADE" ->
                 "NORMAL mode: potential direction only.\nEngine did not confirm — trade manually with care." +
                     (if (noTradeReason != null) "\n⚠ $noTradeReason" else "")

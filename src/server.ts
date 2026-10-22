@@ -406,16 +406,19 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
   const SIGNALS_FILE = path.join(process.cwd(), 'signals-cache.json');
 
   app.get('/api/signals', async (req, reply) => {
-    const q = (req.query as { limit?: string }).limit;
+    const q = req.query as { limit?: string; diag?: string };
     let limit = 20;
-    if (q !== undefined) {
-      const n = Number(q);
+    if (q.limit !== undefined) {
+      const n = Number(q.limit);
       if (!Number.isInteger(n) || n < 1 || n > 50) {
         reply.code(400);
         return { error: 'Invalid limit. Must be an integer between 1 and 50.' };
       }
       limit = n;
     }
+    // ?diag=1 exposes full-scanner diagnostics (all analyzed symbols, not just
+    // the top 50). Additive — the default response shape is unchanged.
+    const wantDiag = q.diag === '1';
     // 1. Try signals-cache.json from paper runner (instant).
     try {
       const raw = fs.readFileSync(SIGNALS_FILE, 'utf8');
@@ -427,6 +430,9 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
           generatedAt: cached.generatedAt,
           scan_started_at: cached.scan_started_at,
           scan_completed_at: cached.scan_completed_at,
+          ...(wantDiag && Array.isArray(cached.diagnostics)
+            ? { diagnostics: cached.diagnostics, diag_count: cached.diagnostics.length }
+            : {}),
         };
       }
     } catch { /* fall through to live scan */ }
