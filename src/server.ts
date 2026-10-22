@@ -18,7 +18,7 @@ import { detectRegime } from './regime';
 import { computeIndicators } from './indicators';
 import type { BinanceDataClient } from './exchange';
 import type { CooldownTracker } from './filters';
-import type { EngineConfig, MarketContext, MasterSignal, SignalGrade, SymbolInput } from './types';
+import type { BacktestTrade, EngineConfig, MarketContext, MasterSignal, SignalGrade, SymbolInput } from './types';
 
 export interface ServerDeps {
   client: BinanceDataClient;
@@ -71,6 +71,9 @@ interface PaperReportAccount {
   balance?: number;
   equity?: number;
   openPositions?: Array<{ symbol: string }>;
+  tradeHistory?: BacktestTrade[];
+  realizedPnl?: number;
+  totalFees?: number;
 }
 
 function readPaperReport(): { account: PaperReportAccount; generatedAt?: string; cycle?: number } | null {
@@ -112,6 +115,107 @@ function safeMessage(err: unknown): string {
 export function isManualOrderGradeOk(grade: SignalGrade): boolean {
   return grade === 'A+' || grade === 'A' || grade === 'NORMAL';
 }
+
+// ---------------------------------------------------------------------------
+// Honest validation reporting.
+//
+// Contract: never present an uncalibrated number as a proven result. Every
+// figure ships with its sample size, and the status says plainly whether
+// anything can be concluded yet.
+// ---------------------------------------------------------------------------
+
+export interface HonestLiveStats {
+  sampleTrades: number;
+  winRatePct: number | null;
+  /** Mean pnlQuote per closed trade — fee- and slippage-inclusive. */
+  expectancyQuote: number | null;
+  netPnlQuote: number;
+  totalFeesQuote: number;
+  maxDrawdownPct: number | null;
+  status: 'NO_TRADES' | 'UNDER_TEST' | 'NO_EDGE' | 'EDGE_UNPROVEN';
+  notes: string[];
+}
+
+/**
+ * Aggregates closed paper trades into honest, fee-inclusive statistics.
+ * pnlQuote is already net of fees/slippage/funding, so the expectancy shown
+ * here is the real per-trade expectancy, not a gross figure.
+ */
+export function buildHonestLiveStats(
+  trades: BacktestTrade[],
+  startBalance: number,
+): HonestLiveStats {
+  const n = trades.length;
+  if (n === 0) {
+    return {
+      sampleTrades: 0,
+      winRatePct: null,
+      expectancyQuote: null,
+      netPnlQuote: 0,
+      totalFeesQuote: 0,
+      maxDrawdownPct: null,
+      status: 'NO_TRADES',
+      notes: ['No closed paper trades yet — nothing can be concluded.'],
+    };
+  }
+  const wins = trades.filter((t) => t.pnlQuote > 0).length;
+  const net = trades.reduce((s, t) => s + t.pnlQuote, 0);
+  const fees = trades.reduce((s, t) => s + (Number.isFinite(t.fees) ? t.fees : 0), 0);
+  // Max drawdown over the cumulative equity curve (chronological by exitTime).
+  const ordered = [...trades].sort((a, b) => a.exitTime - b.exitTime);
+  let eq = startBalance;
+  let peak = startBalance;
+  let maxDd = 0;
+  for (const t of ordered) {
+    eq += t.pnlQuote;
+    if (eq > peak) peak = eq;
+    if (peak > 0) maxDd = Math.max(maxDd, ((peak - eq) / peak) * 100);
+  }
+  const expectancy = net / n;
+  const notes: string[] = [];
+  let status: HonestLiveStats['status'];
+  if (n < 30) {
+    status = 'UNDER_TEST';
+    notes.push(`Sample too small (n=${n}<30) — no conclusions yet, still under test.`);
+  } else if (expectancy <= 0) {
+    status = 'NO_EDGE';
+    notes.push('Expectancy is not positive: no edge demonstrated in live paper trading.');
+  } else {
+    status = 'EDGE_UNPROVEN';
+    notes.push('Expectancy is positive but unproven — needs out-of-sample confirmation.');
+  }
+  notes.push('Expectancy is net of fees, slippage and funding (from pnlQuote).');
+  return {
+    sampleTrades: n,
+    winRatePct: (wins / n) * 100,
+    expectancyQuote: expectancy,
+    netPnlQuote: net,
+    totalFeesQuote: fees,
+    maxDrawdownPct: maxDd,
+    status,
+    notes,
+  };
+}
+
+/**
+ * Verified backtest results (run 2026-10-22, static — these runs are done).
+ * Universe: top-20 USDT pairs, ~5.5 months (May→Oct 2026), 1h/4h bars,
+ * 1% risk/trade, 0.05% fee/side + 0.02% slippage. A losing backtest means the
+ * idea has no edge — not a tuning problem.
+ */
+const BACKTEST_SUMMARY = {
+  period: '2026-05 → 2026-10 (~5.5 months)',
+  universe: 'top-20 USDT pairs (Binance)',
+  costModel: '0.05% fee/side + 0.02% slippage, 1% risk/trade',
+  runs: [
+    { name: 'Engine (live-logic replay)', trades: 1, winRatePct: 0, profitFactor: 0, expectancyQuote: -102.81, maxDrawdownPct: 1.0, verdict: 'NO_EDGE' },
+    { name: 'Scalp (dump-confirm LONG / pump-confirm SHORT)', trades: 516, winRatePct: 39.1, profitFactor: 0.95, expectancyQuote: -2.64, maxDrawdownPct: 42.4, verdict: 'NO_EDGE' },
+    { name: 'RSI(2) mean reversion', trades: 2830, winRatePct: 56.3, profitFactor: 0.36, expectancyQuote: -3.52, maxDrawdownPct: 99.6, verdict: 'NO_EDGE' },
+    { name: 'Donchian breakout (20/10)', trades: 1889, winRatePct: 27.8, profitFactor: 0.76, expectancyQuote: -5.19, maxDrawdownPct: 99.0, verdict: 'NO_EDGE' },
+    { name: 'Bollinger (20,2) mean reversion', trades: 2519, winRatePct: 24.8, profitFactor: 0.34, expectancyQuote: -3.97, maxDrawdownPct: 100.0, verdict: 'NO_EDGE' },
+  ],
+  conclusion: '5 ideas tested, 0 edges found. NO_TRADE without evidence of edge is the system working correctly.',
+};
 
 function lastFinite(values: number[] | undefined): number | null {
   if (!values || values.length === 0) return null;
@@ -395,6 +499,21 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       return { running: false, note: 'paper runner has not written a report yet' };
     }
     return { running: true, virtual: true, ...report };
+  });
+
+  // ------------------------------------------------------- honest validation
+  // Fee-inclusive live stats + verified backtest summary. Never presents an
+  // uncalibrated score as a win probability; every figure carries its sample.
+  app.get('/api/validation', async () => {
+    const report = readPaperReport();
+    const trades = report?.account?.tradeHistory ?? [];
+    return {
+      generatedAt: new Date().toISOString(),
+      paperOnly: true,
+      note: 'No real-money trading. Scores are not win probabilities — no calibration data exists.',
+      live: buildHonestLiveStats(trades, deps.config.paperStartBalance),
+      backtests: BACKTEST_SUMMARY,
+    };
   });
 
   // ---------------------------------------------------------------- paper intents

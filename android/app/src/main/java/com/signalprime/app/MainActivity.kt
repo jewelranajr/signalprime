@@ -792,6 +792,7 @@ class MainActivity : AppCompatActivity() {
         thread {
             try {
                 val res = ApiClient.paperStatus()
+                val validation = try { ApiClient.get("/api/validation") } catch (_: Exception) { null }
                 runOnUiThread {
                     if (!res.optBoolean("running", false)) {
                         paperSummary.text = "paper runner is not active"
@@ -815,6 +816,61 @@ class MainActivity : AppCompatActivity() {
                     pnlRow.addView(line("$${fmt(pnl)}", pnlColor, 15f, bold = true))
                     paperBox.addView(pnlRow)
                     paperBox.addView(spacer(8))
+
+                    // Honest validation report: fee-inclusive live stats + verified
+                    // backtests. Scores are never presented as win probabilities.
+                    if (validation != null) {
+                        val live = validation.optJSONObject("live")
+                        val bt = validation.optJSONObject("backtests")
+                        if (live != null) {
+                            val card = innerCard()
+                            card.addView(line("Honest report", WHITE, 15f, bold = true))
+                            card.addView(spacer(4))
+                            val n = live.optInt("sampleTrades", 0)
+                            val statusTxt = when (live.optString("status", "")) {
+                                "NO_TRADES" -> "no closed trades yet"
+                                "UNDER_TEST" -> "UNDER TEST (n<30)"
+                                "NO_EDGE" -> "NO EDGE FOUND"
+                                "EDGE_UNPROVEN" -> "edge unproven"
+                                else -> live.optString("status", "")
+                            }
+                            val statusColor = if (live.optString("status") == "NO_EDGE") RED else MUTED
+                            card.addView(line("Live paper: $n trades — $statusTxt", statusColor, 13f, bold = true))
+                            if (n > 0) {
+                                val wr = live.optDouble("winRatePct", Double.NaN)
+                                val exp = live.optDouble("expectancyQuote", Double.NaN)
+                                val dd = live.optDouble("maxDrawdownPct", Double.NaN)
+                                val net = live.optDouble("netPnlQuote", 0.0)
+                                card.addView(spacer(2))
+                                val wrTxt = if (wr.isNaN()) "—" else "${wr.toInt()}%"
+                                val expTxt = if (exp.isNaN()) "—" else "$${fmt(exp)}/trade"
+                                card.addView(line("Win $wrTxt  •  Expectancy $expTxt (fee-incl.)", MUTED, 12f))
+                                val ddTxt = if (dd.isNaN()) "—" else "${String.format("%.1f", dd)}%"
+                                card.addView(line("Max DD $ddTxt  •  Net $${fmt(net)}", MUTED, 12f))
+                            }
+                            if (bt != null) {
+                                card.addView(spacer(6))
+                                card.addView(line("Backtests (5.5mo, top-20, fees incl.):", MUTED, 12f))
+                                val runs = bt.optJSONArray("runs")
+                                if (runs != null) {
+                                    for (i in 0 until runs.length()) {
+                                        val r = runs.getJSONObject(i)
+                                        val pf = r.optDouble("profitFactor", Double.NaN)
+                                        val pfTxt = if (pf.isNaN()) "—" else String.format("%.2f", pf)
+                                        card.addView(line(
+                                            "• ${r.optString("name")}: ${r.optInt("trades", 0)} trades, PF $pfTxt → ${r.optString("verdict")}",
+                                            "#5b6577", 11f
+                                        ))
+                                    }
+                                }
+                                card.addView(spacer(4))
+                                card.addView(line("Scores are not win probabilities.", "#8a94a6", 11f))
+                                card.addView(line("NO_TRADE without edge = correct.", "#8a94a6", 11f))
+                            }
+                            paperBox.addView(card)
+                            paperBox.addView(spacer(8))
+                        }
+                    }
 
                     // Win rate from trade history — separate for NORMAL vs GOOD
                     val history = acc.optJSONArray("tradeHistory")
