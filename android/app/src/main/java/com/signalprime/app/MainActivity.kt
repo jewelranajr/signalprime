@@ -567,7 +567,18 @@ class MainActivity : AppCompatActivity() {
         card.addView(spacer(6))
         val grade = s.optString("signal_grade")
         val conf = s.optInt("confidence")
-        card.addView(line("Grade $grade   •   Score $score   •   Conf $conf%", MUTED, 13f))
+        val isNoTrade = dir == "NO_TRADE"
+        // NO_TRADE signals carry no computed confidence (engine default 0) — show "—".
+        val confText = if (isNoTrade) "—" else "$conf%"
+        card.addView(line("Grade $grade   •   Score $score   •   Conf $confText", MUTED, 13f))
+        // Engine's rejection reason, so it is clear WHY this is NO_TRADE.
+        if (isNoTrade) {
+            val reason = s.optJSONArray("reasons")?.optString(0, "")?.takeIf { it.isNotBlank() }
+            if (reason != null) {
+                card.addView(spacer(2))
+                card.addView(line("⚠ $reason", "#fbbf24", 12f))
+            }
+        }
         // Signal strength below (user requested)
         val (strengthText, strengthColor) = getSignalStrength(score)
         card.addView(spacer(4))
@@ -598,7 +609,11 @@ class MainActivity : AppCompatActivity() {
         val entryPx = entryObj?.optDouble("preferred", Double.NaN) ?: Double.NaN
         val slObj = s.optJSONObject("stop_loss")
         val slPx = slObj?.optDouble("price", Double.NaN) ?: Double.NaN
-        val entryColor = if (dir.contains("SHORT")) RED else GREEN
+        val entryColor = when {
+            dir.contains("SHORT") -> RED
+            dir.contains("LONG") -> GREEN
+            else -> MUTED // NO_TRADE: hypothetical reference, not a directional call
+        }
         card.addView(spacer(4))
         if (!entryPx.isNaN() && entryPx > 0) {
             val posRow = LinearLayout(this).apply {
@@ -607,6 +622,7 @@ class MainActivity : AppCompatActivity() {
             }
             posRow.addView(line("Entry: ", MUTED, 13f))
             posRow.addView(line(fmt(entryPx), entryColor, 14f, bold = true))
+            if (isNoTrade) posRow.addView(line("  ~hypothetical", "#5b6577", 11f))
             card.addView(posRow)
         } else {
             // No engine entry — show nothing (NO_TRADE rows: status + score only)
@@ -626,6 +642,7 @@ class MainActivity : AppCompatActivity() {
             }
             slRow.addView(line("Stop loss: ", MUTED, 13f))
             slRow.addView(line(fmt(slPx), RED, 14f, bold = true))
+            if (isNoTrade) slRow.addView(line("  ~hypothetical", "#5b6577", 11f))
             card.addView(slRow)
         } else {
             // No engine SL — show nothing (NO_TRADE rows: status + score only)
@@ -760,7 +777,10 @@ class MainActivity : AppCompatActivity() {
         }
         scoreRow.addView(line("Score ", MUTED, 13f))
         scoreRow.addView(line("$score", WHITE, 22f, bold = true))
-        scoreRow.addView(line("  •  Conf $conf%", MUTED, 13f))
+        // NO_TRADE carries no computed confidence — show "—" instead of "0%".
+        val detailNoTrade = rawDir == "NO_TRADE"
+        val detailConfText = if (detailNoTrade) "—" else "$conf%"
+        scoreRow.addView(line("  •  Conf $detailConfText", MUTED, 13f))
         val gradeBadge = badge(grade, if (grade == "NORMAL") "#f0a832" else ACCENT)
         val gp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         gp.leftMargin = dp(8)
@@ -795,7 +815,9 @@ class MainActivity : AppCompatActivity() {
 
         val entry = s.optJSONObject("entry")?.optDouble("preferred", Double.NaN) ?: Double.NaN
         if (!entry.isNaN() && entry > 0) {
-            priceRow("Entry price", fmt(entry), dirColor)
+            // NO_TRADE levels are hypothetical references, not confirmed setups.
+            val hyp = if (detailNoTrade) "  ~hypothetical" else ""
+            priceRow("Entry price", fmt(entry) + hyp, if (detailNoTrade) MUTED else dirColor)
             val qty = s.optJSONObject("position")?.optDouble("quantity", Double.NaN) ?: Double.NaN
             if (!qty.isNaN() && qty > 0) priceRow(if (isLong) "Buy qty" else "Sell qty", fmt(qty), WHITE)
         } else {
@@ -803,8 +825,10 @@ class MainActivity : AppCompatActivity() {
             priceRow("Entry price", "—", MUTED)
         }
         val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN) ?: Double.NaN
-        if (!sl.isNaN() && sl > 0) priceRow("Stop loss", fmt(sl), RED)
-        else priceRow("Stop loss", "—", MUTED)
+        if (!sl.isNaN() && sl > 0) {
+            val slHyp = if (detailNoTrade) "  ~hypothetical" else ""
+            priceRow("Stop loss", fmt(sl) + slHyp, RED)
+        } else priceRow("Stop loss", "—", MUTED)
         val tpObj = s.optJSONObject("take_profit")
         val tp1 = tpObj?.optDouble("tp1", Double.NaN) ?: Double.NaN
         val tp2 = tpObj?.optDouble("tp2", Double.NaN) ?: Double.NaN
@@ -814,9 +838,11 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(spacer(8))
         // Status note
+        val noTradeReason = s.optJSONArray("reasons")?.optString(0, "")?.takeIf { it.isNotBlank() }
         val noteText = when {
             signalMode == "NORMAL" && rawDir == "NO_TRADE" ->
-                "NORMAL mode: potential direction only.\nEngine did not confirm — trade manually with care."
+                "NORMAL mode: potential direction only.\nEngine did not confirm — trade manually with care." +
+                    (if (noTradeReason != null) "\n⚠ $noTradeReason" else "")
             !canOrder -> "Order disabled — engine filters not met."
             else -> "✓ Engine-approved: order will be queued as PAPER."
         }
