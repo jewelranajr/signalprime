@@ -110,6 +110,13 @@ export class PaperTrader {
     if (!signal.entry || !signal.stop_loss || !signal.take_profit || !signal.position) {
       return { id: null, reason: 'rejected: incomplete trade plan (entry/SL/TP/position)' };
     }
+    if (signal.entry.type === 'WAIT_FOR_RETEST') {
+      // The chase guard said "do not chase; wait for a retest". Filling
+      // immediately at entry.preferred (the untouched zone level) would be a
+      // phantom fill — the paper trader cannot simulate waiting for price to
+      // touch the zone, so it must not open here at all.
+      return { id: null, reason: 'rejected: WAIT_FOR_RETEST entry zone not yet touched (no chase fills)' };
+    }
     for (const p of this.positions.values()) {
       if (p.symbol === signal.symbol) {
         return { id: null, reason: `rejected: a position is already open for ${signal.symbol}` };

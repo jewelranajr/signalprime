@@ -415,9 +415,10 @@ class MainActivity : AppCompatActivity() {
                         val dir = s.optString("direction", "NO_TRADE")
 
                         if (signalMode == "STRICT") {
-                            // Strict: only ACTIVE A+/A signals (score 85+)
-                            if (dir == "NO_TRADE" && s.optString("status") != "ACTIVE") continue
-                            if (bestScore < 85 && dir == "NO_TRADE") continue
+                            // Strict: only ACTIVE signals scoring 85+ (GOOD tier).
+                            // NORMAL (80) and WAITING signals stay out of this mode.
+                            if (s.optString("status") != "ACTIVE") continue
+                            if (bestScore < 85) continue
                         } else {
                             // Normal: scores 65-80 range
                             if (bestScore < 65 || bestScore > 80) continue
@@ -453,7 +454,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
             fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            val clean = createdAt.substringBefore(".").substringBefore("+")
+            val clean = createdAt.substringBefore(".").substringBefore("+").trimEnd('Z')
             val date = fmt.parse(clean) ?: return ""
             val diffMs = System.currentTimeMillis() - date.time
             if (diffMs < 0) return "now"
@@ -648,9 +649,16 @@ class MainActivity : AppCompatActivity() {
         val score = if (displayScore > 0) displayScore else maxOf(longScore, shortScore)
         val canOrder = (rawDir == "LONG" || rawDir == "SHORT") &&
             s.optString("status") == "ACTIVE" &&
-            (s.optString("signal_grade") == "A+" || s.optString("signal_grade") == "A")
+            (s.optString("signal_grade") == "A+" ||
+                s.optString("signal_grade") == "A" ||
+                s.optString("signal_grade") == "NORMAL")
         val isLong = dir.contains("LONG")
-        val dirColor = if (isLong) GREEN else RED
+        val isShort = dir.contains("SHORT")
+        val dirColor = when {
+            isLong -> GREEN
+            isShort -> RED
+            else -> MUTED
+        }
         val (strengthText, strengthColor) = getSignalStrength(score)
         val grade = s.optString("signal_grade")
         val conf = s.optInt("confidence")
@@ -723,13 +731,18 @@ class MainActivity : AppCompatActivity() {
             val qty = s.optJSONObject("position")?.optDouble("quantity", Double.NaN) ?: Double.NaN
             if (!qty.isNaN() && qty > 0) priceRow(if (isLong) "Buy qty" else "Sell qty", fmt(qty), WHITE)
         } else {
-            priceRow("Entry price", "Market", dirColor)
+            // No engine entry (NO_TRADE rows): status + score only, never a fabricated price.
+            priceRow("Entry price", "—", MUTED)
         }
         val sl = s.optJSONObject("stop_loss")?.optDouble("price", Double.NaN) ?: Double.NaN
         if (!sl.isNaN() && sl > 0) priceRow("Stop loss", fmt(sl), RED)
         else priceRow("Stop loss", "—", MUTED)
-        val tp = s.optJSONObject("take_profit")?.optDouble("price", Double.NaN) ?: Double.NaN
-        if (!tp.isNaN() && tp > 0) priceRow("Target", fmt(tp), GREEN)
+        val tpObj = s.optJSONObject("take_profit")
+        val tp1 = tpObj?.optDouble("tp1", Double.NaN) ?: Double.NaN
+        val tp2 = tpObj?.optDouble("tp2", Double.NaN) ?: Double.NaN
+        val tp3 = tpObj?.optDouble("tp3", Double.NaN) ?: Double.NaN
+        val targets = listOf(tp1, tp2, tp3).filter { !it.isNaN() && it > 0 }
+        if (targets.isNotEmpty()) priceRow("Target", targets.joinToString(" / ") { fmt(it) }, GREEN)
 
         root.addView(spacer(8))
         // Status note
@@ -898,8 +911,13 @@ class MainActivity : AppCompatActivity() {
             "Entry ${p.optDouble("entry")}  •  Qty ${p.optDouble("quantity")}",
             MUTED, 13f
         ))
+        // Backend sends takeProfits as an array [tp1, tp2, tp3]
+        val tps = p.optJSONArray("takeProfits")
+        val tpLine = if (tps != null && tps.length() > 0) {
+            (0 until tps.length()).joinToString(" / ") { fmt(tps.optDouble(it)) }
+        } else "—"
         card.addView(line(
-            "SL ${p.optDouble("stopLoss")}  •  TP ${p.optDouble("takeProfit")}",
+            "SL ${fmt(p.optDouble("stopLoss"))}  •  TP $tpLine",
             "#5b6577", 12f
         ))
         // Unrealized PnL from live price (green = profit, red = loss)

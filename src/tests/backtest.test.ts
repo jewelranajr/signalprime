@@ -71,28 +71,65 @@ describe('paper trading', () => {
     return s;
   }
 
-  it('openFromSignal rejects NO_TRADE and accepts a valid A-tier LONG', () => {
+  it('openFromSignal rejects NO_TRADE signals', () => {
     const cfg = strictConfig();
     const pt = new PaperTrader(cfg);
     const nt = noTradeSignal('BTCUSDT', ['test']);
     const rej = pt.openFromSignal(nt);
     assert.equal(rej.id, null);
     assert.ok(rej.reason && rej.reason.length > 0);
-
-    const sig = activeLong(Date.now());
-    const acc = pt.openFromSignal(sig);
-    assert.ok(acc.id, `open failed: ${acc.reason}`);
-    assert.equal(pt.account.positions.length, 1);
-    // Duplicate symbol rejected.
-    const dup = pt.openFromSignal(sig);
-    assert.equal(dup.id, null);
   });
 
-  it('onCandle settles a stop-loss hit and records history', () => {
+  it('WAIT_FOR_RETEST entries are marked WAITING and never opened (no phantom fills)', () => {
     const cfg = strictConfig();
     const pt = new PaperTrader(cfg);
+    const sig = activeLong(Date.now());
+    // The steady-uptrend fixture trips the chase guard: price extended beyond
+    // the value zone, so the engine must not mark the entry actionable.
+    assert.equal(sig.entry!.type, 'WAIT_FOR_RETEST', 'fixture must hit the chase guard');
+    assert.equal(sig.status, 'WAITING');
+    const r = pt.openFromSignal(sig);
+    assert.equal(r.id, null, `must not open: ${r.reason}`);
+    assert.equal(pt.account.positions.length, 0);
+    // Duplicate symbol rejected (control via a synthetic MARKET signal is in paper.test.ts).
+  });
+
+  it('onCandle settles a stop-loss hit and records history (synthetic MARKET signal)', () => {
+    const cfg = strictConfig();
+    const pt = new PaperTrader(cfg);
+    // Synthetic MARKET-entry signal: entry fills at the tradable price.
     const now = Date.now();
-    const sig = activeLong(now);
+    const sig = {
+      signal_id: 'SL-TEST',
+      symbol: 'BTCUSDT',
+      direction: 'LONG',
+      status: 'ACTIVE',
+      signal_grade: 'A',
+      long_score: 86,
+      short_score: 20,
+      confidence: 70,
+      probability_estimate: 60,
+      probability_note: 'test',
+      market_regime: 'WEAK_BULL',
+      entry: { low: 99, high: 101, preferred: 100, type: 'MARKET', reason: 'test' },
+      stop_loss: { price: 95, distance_percent: 5, reason: 'test' },
+      take_profit: { tp1: 105, tp2: 110, tp3: 120, reasons: [] as string[] },
+      risk_reward: { tp1: 1, tp2: 2, tp3: 4 },
+      position: { risk_percent: 1, risk_amount: 100, quantity: 20, notional: 2000, leverage: 2 },
+      market_price: 100,
+      mtf: { '1m': 'NEUTRAL', '5m': 'NEUTRAL', '15m': 'NEUTRAL', '1h': 'NEUTRAL', '4h': 'NEUTRAL', '1d': 'NEUTRAL' },
+      confirmation: {
+        trend: false, structure: false, momentum: false, volume: false,
+        vwap: false, breakout: false, liquidity: false,
+      },
+      reasons: [] as string[],
+      warnings: [] as string[],
+      invalidation: [] as string[],
+      correlation_score: 0,
+      ai_rating: 'AI_NEUTRAL',
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + 3600_000).toISOString(),
+    } as MasterSignal;
     const { id } = pt.openFromSignal(sig);
     assert.ok(id);
     const sl = sig.stop_loss!.price;

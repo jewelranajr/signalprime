@@ -35,7 +35,13 @@ object ApiClient {
             ""
         }
         conn.disconnect()
-        val json = if (text.isBlank()) JSONObject() else JSONObject(text)
+        // Non-JSON error pages (e.g. a Render/HTML 502) must not throw here;
+        // callers see a clean "HTTP <code>" ApiException instead.
+        val json = try {
+            if (text.isBlank()) JSONObject() else JSONObject(text)
+        } catch (_: Exception) {
+            JSONObject()
+        }
         if (code !in 200..299) {
             throw ApiException(json.optString("error", "HTTP $code"))
         }

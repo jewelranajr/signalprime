@@ -29,6 +29,7 @@ import type {
   ScorePenalty,
   MTFAnalysis,
   MarketRegime,
+  SignalStatus,
   AIFeatures,
   MarketContext,
   LiquidityCheck,
@@ -1112,6 +1113,11 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
 
   // Plan first: RR is needed for AI features and downstream gates.
   const entry = planEntry(direction, pcs, pind);
+  // A WAIT_FOR_RETEST entry is not actionable yet: the chase guard said "do not
+  // chase; wait for a retest". Mark the signal WAITING so the paper runner, the
+  // manual-order endpoint, and the app all treat it as not-yet-tradable instead
+  // of filling immediately at an untouched zone price (phantom fill).
+  const entryStatus: SignalStatus = entry.type === 'WAIT_FOR_RETEST' ? 'WAITING' : 'ACTIVE';
   const sl = planStopLoss(direction, entry.preferred, pcs, pind);
   const { plan: tps, rr } = planTakeProfits(
     direction,
@@ -1175,7 +1181,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       signal_id: `${input.symbol}-${now}`,
       symbol: input.symbol,
       direction,
-      status: 'ACTIVE',
+      status: entryStatus,
       signal_grade: 'NORMAL',
       long_score: round1(scores.long),
       short_score: round1(scores.short),
@@ -1394,7 +1400,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
     signal_id: `${input.symbol}-${now}`,
     symbol: input.symbol,
     direction,
-    status: 'ACTIVE',
+    status: entryStatus,
     signal_grade: grade,
     long_score: round1(scores.long),
     short_score: round1(scores.short),

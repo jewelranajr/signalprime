@@ -18,7 +18,11 @@ function deps(now: number, relaxed = true): EngineDeps {
 
 function validTradeShape(s: MasterSignal, direction: 'LONG' | 'SHORT'): void {
   assert.equal(s.direction, direction);
-  assert.equal(s.status, 'ACTIVE');
+  // Chase-guarded entries are WAITING (not yet actionable); all other
+  // fully-planned signals are ACTIVE. The invariant: a WAIT_FOR_RETEST
+  // plan must never be emitted as ACTIVE (no phantom fills).
+  const expectWaiting = !!s.entry && s.entry.type === 'WAIT_FOR_RETEST';
+  assert.equal(s.status, expectWaiting ? 'WAITING' : 'ACTIVE');
   assert.ok(s.entry && s.stop_loss && s.take_profit && s.risk_reward && s.position, 'trade fields present');
   assert.ok(s.entry.low < s.entry.preferred && s.entry.preferred < s.entry.high);
   if (direction === 'LONG') {

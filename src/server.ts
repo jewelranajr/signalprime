@@ -18,7 +18,7 @@ import { detectRegime } from './regime';
 import { computeIndicators } from './indicators';
 import type { BinanceDataClient } from './exchange';
 import type { CooldownTracker } from './filters';
-import type { EngineConfig, MarketContext, MasterSignal, SymbolInput } from './types';
+import type { EngineConfig, MarketContext, MasterSignal, SignalGrade, SymbolInput } from './types';
 
 export interface ServerDeps {
   client: BinanceDataClient;
@@ -102,6 +102,15 @@ export function isValidSymbol(s: string): boolean {
 /** Never leak internals: surface only the message, never a stack trace. */
 function safeMessage(err: unknown): string {
   return err instanceof Error && err.message ? err.message : 'Unknown error';
+}
+
+/**
+ * Grades the manual paper-order endpoint accepts. Mirrors the paper runner
+ * and PaperTrader: A+/A always, plus NORMAL when the engine marks it ACTIVE
+ * (score 80+, the user's configured paper-entry threshold).
+ */
+export function isManualOrderGradeOk(grade: SignalGrade): boolean {
+  return grade === 'A+' || grade === 'A' || grade === 'NORMAL';
 }
 
 function lastFinite(values: number[] | undefined): number | null {
@@ -414,7 +423,9 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       reply.code(500);
       return { error: 'Internal error' };
     }
-    const gradeOk = signal.signal_grade === 'A+' || signal.signal_grade === 'A';
+    // Manual orders must pass the same bar as the paper runner: A+/A, or
+    // NORMAL when the engine marks it ACTIVE (score 80+, user threshold).
+    const gradeOk = isManualOrderGradeOk(signal.signal_grade);
     if (signal.direction !== direction || signal.status !== 'ACTIVE' || !gradeOk) {
       reply.code(400);
       return {
