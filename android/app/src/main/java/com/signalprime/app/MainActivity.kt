@@ -258,6 +258,10 @@ class MainActivity : AppCompatActivity() {
     // ---------- UI helpers ----------
 
     private var signalMode = "STRICT" // STRICT or NORMAL
+    // Generation counter for loadPaper(): every call bumps it; async
+    // callbacks must verify their generation is still current before
+    // touching paperBox, otherwise overlapping refreshes append duplicates.
+    private var paperLoadGen = 0
     private lateinit var modeStrictBtn: Button
     private lateinit var modeNormalBtn: Button
     private lateinit var winRateText: TextView
@@ -911,11 +915,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadPaper() {
         if (ApiClient.baseUrl.isEmpty()) return
+        val gen = ++paperLoadGen // stale async callbacks from older calls must not touch the UI
         thread {
             try {
                 val res = ApiClient.paperStatus()
                 val validation = try { ApiClient.get("/api/validation") } catch (_: Exception) { null }
                 runOnUiThread {
+                    if (gen != paperLoadGen) return@runOnUiThread // superseded by a newer loadPaper()
                     if (!res.optBoolean("running", false)) {
                         paperSummary.text = "paper runner is not active"
                         paperBox.removeAllViews()
@@ -1057,6 +1063,7 @@ class MainActivity : AppCompatActivity() {
                         thread {
                             val prices = ApiClient.binancePrices(syms)
                             runOnUiThread {
+                                if (gen != paperLoadGen) return@runOnUiThread // stale price fetch; a newer load owns paperBox now
                                 for (i in 0 until positions.length()) {
                                     paperBox.addView(positionRow(positions.getJSONObject(i), prices))
                                 }
