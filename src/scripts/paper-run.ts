@@ -361,29 +361,70 @@ async function main(): Promise<void> {
       await processPaperIntents(client, trader, () => printReport(trader, cycle, cooldowns));
 
       // 2+3. Scan symbols, open A+/A/NORMAL signals.
+      // Two-phase scan:
+      //   Phase 1 — concurrent analysis (fetch + buildSignal). Pure per-symbol
+      //   work, no shared mutable state; bounded by MAX_CONCURRENCY (default 8).
+      //   The exchange client's own semaphore + 429 hard-stop + backoff keep
+      //   this rate-limit safe.
+      //   Phase 2 — serial gate pipeline (pendingConfirmations / cooldowns /
+      //   trader). Unchanged behavior: identical order and semantics to the
+      //   previous serial loop.
       // NORMAL only reaches here with ACTIVE status (engine gates <80 itself).
       const allSignals: MasterSignal[] = [];
-      for (const symbol of symbols) {
-        if (stop) break;
-        let signal: MasterSignal;
-        let ticker: { quoteVolume: number; priceChangePct: number; lastPrice: number } | undefined;
-        try {
-          const candles = await client.getMultiTimeframe(symbol);
-          const t = tickerMap.get(symbol);
-          ticker = t;
-          signal = buildSignal(
-            {
-              symbol,
-              candles,
-              quoteVolume24h: t?.quoteVolume ?? 0,
-              spreadPct: 0, // spread filter skipped in bulk mode; volume check still applies
-            },
-            { config, market, balance: config.accountBalance, now: Date.now() },
-          );
-        } catch (err) {
-          console.log(`${symbol}: analysis failed (${err instanceof Error ? err.message : err})`);
-          continue;
-        }
+      const scanStartedAt = new Date().toISOString();
+      const scanT0 = Date.now();
+      const poolSize = Math.max(1, Math.min(10, Math.floor(Number(config.maxConcurrency) || 5)));
+      interface Analyzed {
+        symbol: string;
+        signal: MasterSignal | null;
+        ticker: { quoteVolume: number; priceChangePct: number; lastPrice: number } | undefined;
+      }
+      const analyzed: Analyzed[] = [];
+      for (let k = 0; k < symbols.length && !stop; k += poolSize) {
+        const chunk = symbols.slice(k, k + poolSize);
+        const results = await Promise.all(
+          chunk.map(async (symbol): Promise<Analyzed> => {
+            try {
+              const candles = await client.getMultiTimeframe(symbol);
+              const t = tickerMap.get(symbol);
+              const signal = buildSignal(
+                {
+                  symbol,
+                  candles,
+                  quoteVolume24h: t?.quoteVolume ?? 0,
+                  spreadPct: 0, // spread filter skipped in bulk mode; volume check still applies
+                },
+                { config, market, balance: config.accountBalance, now: Date.now() },
+              );
+              return { symbol, signal, ticker: t };
+            } catch (err) {
+              console.log(`${symbol}: analysis failed (${err instanceof Error ? err.message : err})`);
+              return { symbol, signal: null, ticker: undefined };
+            }
+          }),
+        );
+        analyzed.push(...results);
+      }
+      // Phase 2 — serial gates.
+      const gateBucket = (reason: string): string => {
+        if (reason.includes('below minimum score')) return 'score<minScore';
+        if (reason.includes('NORMAL tier below paper entry threshold')) return 'score<80(NORMAL-paper)';
+        if (reason.includes('Direction gap')) return 'direction-gap';
+        if (reason.includes('MTF does not confirm')) return 'MTF-conflict';
+        if (reason.includes('Confidence below')) return 'confidence';
+        if (reason.includes('RR below minimum')) return 'RR';
+        if (reason.includes('Liquidity')) return 'liquidity';
+        return 'other';
+      };
+      const gateCounts = new Map<string, number>();
+      let fetchFailed = 0;
+      let nActive = 0;
+      let nWaiting = 0;
+      for (const a of analyzed) {
+        if (!a.signal) { fetchFailed++; continue; }
+        const symbol = a.symbol;
+        const signal: MasterSignal = a.signal;
+        const ticker = a.ticker;
         allSignals.push(signal);
         console.log(
           `${symbol}: ${signal.direction} grade=${signal.signal_grade} ` +
@@ -393,8 +434,16 @@ async function main(): Promise<void> {
         if (signal.direction === 'NO_TRADE' || signal.status !== 'ACTIVE') {
           // Signal lost/flipped: a pending confirmation no longer applies.
           if (pendingConfirmations.has(symbol)) pendingConfirmations.delete(symbol);
+          if (signal.direction === 'NO_TRADE') {
+            const b = gateBucket(signal.reasons[0] ?? 'unknown');
+            gateCounts.set(b, (gateCounts.get(b) ?? 0) + 1);
+          } else {
+            nWaiting++;
+            console.log(`  waiting: ${signal.reasons[0] ?? 'n/a'}`);
+          }
           continue;
         }
+        nActive++;
         // A+/A always; NORMAL only when engine emitted it ACTIVE (score 80+,
         // user threshold — the 65-80 NORMAL band stays display-only NO_TRADE).
         if (signal.signal_grade !== 'A+' && signal.signal_grade !== 'A' && signal.signal_grade !== 'NORMAL') continue;
@@ -444,15 +493,37 @@ async function main(): Promise<void> {
         }
       }
 
+      // Scan observability: duration, counts, top rejection gates.
+      const scanMs = Date.now() - scanT0;
+      console.log(
+        `scan done: ${symbols.length} coins, ${fetchFailed} failed, ` +
+          `${nActive} ACTIVE, ${nWaiting} WAITING in ${(scanMs / 1000).toFixed(1)}s (pool=${poolSize})`,
+      );
+      if (gateCounts.size > 0) {
+        const top = [...gateCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+        console.log('  top NO_TRADE gates: ' + top.map(([g, n]) => `${g}=${n}`).join(', '));
+      }
+
       // Save signals cache for /api/signals (instant API response).
-      // Sort by best score descending, keep top 50.
+      // Sort by best score descending, keep top 50. Atomic write (tmp + rename)
+      // so readers never see a partial file. If the scan analyzed nothing
+      // (e.g. exchange outage), retain the previous cache instead of blanking it.
       allSignals.sort((a, b) => Math.max(b.long_score, b.short_score) - Math.max(a.long_score, a.short_score));
+      const scanCompletedAt = new Date().toISOString();
       try {
-        fs.writeFileSync(SIGNALS_CACHE_PATH, JSON.stringify({
-          generatedAt: new Date().toISOString(),
-          count: allSignals.length,
-          signals: allSignals.slice(0, 50),
-        }));
+        if (allSignals.length === 0 && fs.existsSync(SIGNALS_CACHE_PATH)) {
+          console.log('scan produced no analyzable symbols; retaining previous signals cache');
+        } else {
+          const tmpPath = SIGNALS_CACHE_PATH + '.tmp';
+          fs.writeFileSync(tmpPath, JSON.stringify({
+            generatedAt: scanCompletedAt,
+            scan_started_at: scanStartedAt,
+            scan_completed_at: scanCompletedAt,
+            count: allSignals.length,
+            signals: allSignals.slice(0, 50),
+          }));
+          fs.renameSync(tmpPath, SIGNALS_CACHE_PATH);
+        }
       } catch { /* non-fatal */ }
 
       // 4. Settle open positions on fresh closed 15m candles.

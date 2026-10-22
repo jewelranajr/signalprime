@@ -172,7 +172,7 @@ class MainActivity : AppCompatActivity() {
             }
             setOnClickListener { setSignalMode("STRICT") }
         }
-        modeNormalBtn = styledButton("NORMAL 65-80", outlined = true).apply {
+        modeNormalBtn = styledButton("NORMAL 65-84", outlined = true).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 setMargins(dp(6), 0, 0, 0)
             }
@@ -208,6 +208,15 @@ class MainActivity : AppCompatActivity() {
         sigCard.addView(spacer(8))
         val sigRefresh = styledButton("↻  REFRESH SIGNALS", outlined = true)
         sigCard.addView(sigRefresh)
+        sigCard.addView(spacer(4))
+        // Cache-age / last-refresh line (staleness made visible).
+        signalsMetaText = TextView(this).apply {
+            text = ""
+            textSize = 11f
+            setTextColor(Color.parseColor(MUTED))
+            gravity = Gravity.CENTER
+        }
+        sigCard.addView(signalsMetaText)
         sigCard.addView(spacer(8))
         signalsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         sigCard.addView(signalsBox)
@@ -254,6 +263,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var winRateText: TextView
     private lateinit var winRateNormalText: TextView
     private lateinit var winRateGoodText: TextView
+    private lateinit var signalsMetaText: TextView
+    // Auto-refresh: 5-min interval while the activity is in the foreground.
+    // Started in onResume, stopped in onPause — no leaks, no background drain.
+    private val refreshHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoRefreshRunnable = Runnable {
+        if (ApiClient.baseUrl.isNotEmpty()) loadSignals()
+        scheduleAutoRefresh()
+    }
+
+    private fun scheduleAutoRefresh() {
+        refreshHandler.removeCallbacks(autoRefreshRunnable)
+        refreshHandler.postDelayed(autoRefreshRunnable, 5 * 60 * 1000L)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (ApiClient.baseUrl.isNotEmpty()) loadSignals()
+        scheduleAutoRefresh()
+    }
+
+    override fun onPause() {
+        refreshHandler.removeCallbacks(autoRefreshRunnable)
+        super.onPause()
+    }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -396,11 +429,18 @@ class MainActivity : AppCompatActivity() {
             toast("Connect to a server first")
             return
         }
+        runOnUiThread {
+            if (signalsBox.childCount == 0) {
+                signalsBox.addView(emptyState("Loading…"))
+            }
+        }
         thread {
             try {
                 val res = ApiClient.signals(20)
                 val arr = res.optJSONArray("signals")
+                val generatedAt = res.optString("generatedAt", "")
                 runOnUiThread {
+                    updateSignalsMeta(generatedAt)
                     signalsBox.removeAllViews()
                     if (arr == null || arr.length() == 0) {
                         signalsBox.addView(emptyState("No signals right now.\nEngine is scanning — strict filters apply."))
@@ -409,19 +449,21 @@ class MainActivity : AppCompatActivity() {
                     var shown = 0
                     for (i in 0 until arr.length()) {
                         val s = arr.getJSONObject(i)
+                        // Expired signals are never presented as valid.
+                        if (isExpired(s.optString("expires_at", ""))) continue
                         val longScore = s.optDouble("long_score", 0.0).toInt()
                         val shortScore = s.optDouble("short_score", 0.0).toInt()
                         val bestScore = maxOf(longScore, shortScore)
-                        val dir = s.optString("direction", "NO_TRADE")
 
                         if (signalMode == "STRICT") {
                             // Strict: only ACTIVE signals scoring 85+ (GOOD tier).
-                            // NORMAL (80) and WAITING signals stay out of this mode.
+                            // WAITING signals stay out of this mode.
                             if (s.optString("status") != "ACTIVE") continue
                             if (bestScore < 85) continue
                         } else {
-                            // Normal: scores 65-80 range
-                            if (bestScore < 65 || bestScore > 80) continue
+                            // Normal: scores 65-84. The 81-84 band is paper-traded
+                            // (NORMAL 80+ ACTIVE), so it must be visible here.
+                            if (bestScore < 65 || bestScore > 84) continue
                         }
                         signalsBox.addView(signalRow(s, bestScore))
                         if (++shown >= 10) break
@@ -430,7 +472,7 @@ class MainActivity : AppCompatActivity() {
                         val msg = if (signalMode == "STRICT")
                             "No actionable signals.\nAll scanned coins are NO_TRADE under strict filters."
                         else
-                            "No normal signals (65-80).\nTry refreshing or check strict mode."
+                            "No normal signals (65-84).\nTry refreshing or check strict mode."
                         signalsBox.addView(emptyState(msg))
                     }
                 }
@@ -438,6 +480,32 @@ class MainActivity : AppCompatActivity() {
                 toast("signals: ${e.message}")
             }
         }
+    }
+
+    // ISO-8601 UTC -> epoch ms (shared by expiry check and cache-age display).
+    private fun parseIsoUtcMs(iso: String): Long {
+        return try {
+            val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+            fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            val clean = iso.substringBefore(".").substringBefore("+").trimEnd('Z')
+            fmt.parse(clean)?.time ?: 0L
+        } catch (_: Exception) { 0L }
+    }
+
+    // Expired signals must never be presented as currently valid.
+    private fun isExpired(expiresAt: String): Boolean {
+        if (expiresAt.isBlank()) return false
+        val ms = parseIsoUtcMs(expiresAt)
+        return ms > 0 && System.currentTimeMillis() > ms
+    }
+
+    // Shows how stale the served data is ("Data 12m old"), from the API's generatedAt.
+    private fun updateSignalsMeta(generatedAt: String) {
+        val genMs = parseIsoUtcMs(generatedAt)
+        signalsMetaText.text = if (genMs > 0) {
+            val mins = (System.currentTimeMillis() - genMs) / 60000
+            if (mins < 1) "Data just refreshed" else "Data ${mins}m old"
+        } else ""
     }
 
     private fun emptyState(t: String) = TextView(this).apply {

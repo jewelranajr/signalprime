@@ -119,4 +119,55 @@ describe('server', () => {
     assert.equal(body.backtests.runs.length, 5);
     assert.ok(/0 edges found/.test(body.backtests.conclusion));
   });
+
+  it('/api/signals serves cache file with scan timestamps (backward compatible)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const cachePath = path.join(process.cwd(), 'signals-cache.json');
+    const hadCache = fs.existsSync(cachePath);
+    const backup = hadCache ? fs.readFileSync(cachePath, 'utf8') : null;
+    try {
+      // New format: with scan timestamps.
+      const sig = (sym: string): Record<string, unknown> => ({
+        signal_id: 't', symbol: sym, direction: 'NO_TRADE', status: 'WAITING',
+        signal_grade: 'NO_TRADE', long_score: 10, short_score: 20, confidence: 0,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 900_000).toISOString(),
+      });
+      fs.writeFileSync(cachePath, JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        scan_started_at: '2026-10-22T10:00:00.000Z',
+        scan_completed_at: '2026-10-22T10:05:00.000Z',
+        count: 2, signals: [sig('AUSDT'), sig('BUSDT')],
+      }));
+      const app = await buildApp(testDeps());
+      const res = await app.inject({ method: 'GET', url: '/api/signals?limit=20' });
+      await app.close();
+      assert.equal(res.statusCode, 200);
+      const body = res.json() as {
+        cached: boolean; count: number; generatedAt: string;
+        scan_started_at?: string; scan_completed_at?: string;
+      };
+      assert.equal(body.cached, true);
+      assert.equal(body.count, 2);
+      assert.equal(body.scan_started_at, '2026-10-22T10:00:00.000Z');
+      assert.equal(body.scan_completed_at, '2026-10-22T10:05:00.000Z');
+
+      // Old format: without scan timestamps — must not crash, fields undefined.
+      fs.writeFileSync(cachePath, JSON.stringify({
+        generatedAt: new Date().toISOString(), count: 1, signals: [sig('CUSDT')],
+      }));
+      const app2 = await buildApp(testDeps());
+      const res2 = await app2.inject({ method: 'GET', url: '/api/signals?limit=20' });
+      await app2.close();
+      assert.equal(res2.statusCode, 200);
+      const body2 = res2.json() as { cached: boolean; count: number; scan_started_at?: string };
+      assert.equal(body2.cached, true);
+      assert.equal(body2.count, 1);
+      assert.equal(body2.scan_started_at, undefined);
+    } finally {
+      if (backup !== null) fs.writeFileSync(cachePath, backup);
+      else if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+    }
+  });
 });

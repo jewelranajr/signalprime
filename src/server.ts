@@ -422,7 +422,12 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       const cached = JSON.parse(raw);
       if (cached && Array.isArray(cached.signals)) {
         const signals = cached.signals.slice(0, limit);
-        return { count: signals.length, signals, cached: true, generatedAt: cached.generatedAt };
+        return {
+          count: signals.length, signals, cached: true,
+          generatedAt: cached.generatedAt,
+          scan_started_at: cached.scan_started_at,
+          scan_completed_at: cached.scan_completed_at,
+        };
       }
     } catch { /* fall through to live scan */ }
     // 2. In-memory cache from previous on-demand scan.
