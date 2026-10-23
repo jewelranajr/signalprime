@@ -74,14 +74,25 @@ describe('paper', () => {
 });
 
 describe('paper close lifecycle (Phase H: explicit close-pipeline verification)', () => {
-  const candle = (openTime: number, o: number, h: number, l: number, c: number) => ({
-    openTime, open: o, high: h, low: l, close: c, volume: 1,
-  });
+  // Time-coherent fixtures for the R1 settlement guard: positions open at T0,
+  // settlement candles are 15m bars strictly after T0.
+  const T0 = 1_700_000_000_000;
+  const candle = (k: number, o: number, h: number, l: number, c: number) => {
+    const openTime = T0 + k * 15 * 60 * 1000;
+    return {
+      openTime, open: o, high: h, low: l, close: c, volume: 1,
+      closeTime: openTime + 15 * 60 * 1000 - 1,
+    };
+  };
+  const openAtT0 = (sig: MasterSignal): MasterSignal => {
+    sig.created_at = new Date(T0).toISOString();
+    return sig;
+  };
 
   it('SL hit closes at the stop price with fees; no duplicate close afterwards', () => {
     const trader = new PaperTrader(loadConfig());
     // makeSignal: LONG entry 100, SL 95, TPs 105/110/120
-    const r = trader.openFromSignal(makeSignal('MARKET'));
+    const r = trader.openFromSignal(openAtT0(makeSignal('MARKET')));
     assert.ok(r.id);
     trader.onCandle('TESTUSDT', candle(1, 100, 102, 98, 101));
     assert.equal(trader.account.positions.length, 1, 'untouched candle keeps position open');
@@ -99,7 +110,7 @@ describe('paper close lifecycle (Phase H: explicit close-pipeline verification)'
 
   it('TP legs close fractions at targets; full chain closes the position with profit', () => {
     const trader = new PaperTrader(loadConfig());
-    const r = trader.openFromSignal(makeSignal('MARKET'));
+    const r = trader.openFromSignal(openAtT0(makeSignal('MARKET')));
     assert.ok(r.id);
     // One strong candle tagging all three TPs (105/110/120), fractions 0.4/0.3/0.3.
     trader.onCandle('TESTUSDT', candle(1, 100, 121, 99, 119));
@@ -118,7 +129,7 @@ describe('paper close lifecycle (Phase H: explicit close-pipeline verification)'
     shortSig.entry = { low: 99, high: 101, preferred: 100, type: 'MARKET', reason: 'test' };
     shortSig.stop_loss = { price: 105, distance_percent: 5, reason: 'test' };
     shortSig.take_profit = { tp1: 95, tp2: 90, tp3: 80, reasons: [] };
-    const r = trader.openFromSignal(shortSig);
+    const r = trader.openFromSignal(openAtT0(shortSig));
     assert.ok(r.id);
     trader.onCandle('TESTUSDT', candle(1, 100, 106, 99, 104));
     assert.equal(trader.account.positions.length, 0, 'SHORT SL breach closes');

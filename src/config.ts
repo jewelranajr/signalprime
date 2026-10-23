@@ -54,6 +54,11 @@ export function loadConfig(): EngineConfig {
     // Post-stop-loss cooldown: 24h block on re-entering the same
     // symbol+direction after an SL exit (breaks re-entry loops).
     postSlCooldownMs: num('POST_SL_COOLDOWN_MS', 24 * 3600 * 1000),
+    // Manual-close cooldown: 60m block on re-entering the same
+    // symbol+direction after the user explicitly closes a paper position.
+    // The user's close wins; the engine must not re-enter the identical
+    // setup seconds later while the signal is still ACTIVE.
+    manualCloseCooldownMs: num('MANUAL_CLOSE_COOLDOWN_MS', 3_600_000),
     // Liquidity filter
     maxSpreadPct: num('MAX_SPREAD_PCT', 0.15),
     minQuoteVolume24h: num('MIN_QUOTE_VOLUME_24H', 1_000_000),

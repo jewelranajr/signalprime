@@ -566,6 +566,13 @@ interface SlCooldownRecord {
  *   ('Post-SL cooldown'). An SL exit means the setup failed; re-entering
  *   the same direction minutes later on a fresh signal is how a single
  *   bad setup turns into a loop of repeated losses.
+ * - Manual-close: after the user explicitly closes a paper position,
+ *   recordManualClose() blocks re-entering the same symbol+direction for
+ *   config.manualCloseCooldownMs ('Manual-close cooldown', default 60m).
+ *   The user's explicit close wins — without this, a still-ACTIVE signal
+ *   re-enters the identical setup seconds later via a stale pending
+ *   confirmation. Scoped to symbol+direction: other symbols and the
+ *   opposite direction are never blocked.
  * - Global regime shift: when the market regime changes (observed via
  *   canEmit's regime argument or a recorded signal), emissions whose
  *   direction aligns with the OLD regime are blocked for
@@ -580,6 +587,7 @@ export class CooldownTracker {
   private readonly config: EngineConfig;
   private readonly emissions = new Map<string, EmissionRecord>();
   private readonly slCooldowns = new Map<string, SlCooldownRecord>();
+  private readonly manualCooldowns = new Map<string, number>();
   private globalRegime: MarketRegime = 'SIDEWAYS';
   private previousRegime: MarketRegime | null = null;
   private lastRegimeShiftAt: number | null = null;
@@ -621,6 +629,16 @@ export class CooldownTracker {
       }
     }
 
+    // Manual-close cooldown: same symbol + same direction blocked.
+    // Scoped narrowly: other symbols and the opposite direction pass.
+    const mc = this.manualCooldowns.get(`${symbol}:${direction}`);
+    if (mc !== undefined) {
+      const elapsed = Math.max(0, t - mc);
+      if (elapsed < this.config.manualCloseCooldownMs) {
+        return { ok: false, reason: 'Manual-close cooldown' };
+      }
+    }
+
     if (
       this.previousRegime !== null &&
       this.lastRegimeShiftAt !== null &&
@@ -654,6 +672,18 @@ export class CooldownTracker {
     const t = Number.isFinite(time) ? (time as number) : Date.now();
     if (!symbol || (direction !== 'LONG' && direction !== 'SHORT')) return;
     this.slCooldowns.set(`${symbol}:${direction}`, { direction, time: t });
+    this.prune(t);
+  }
+
+  /**
+   * Record a manual close: block re-entering this symbol+direction for
+   * config.manualCloseCooldownMs. Only explicit user closes call this —
+   * TP/SL exits are untouched (SL keeps its own 24h cooldown).
+   */
+  recordManualClose(symbol: string, direction: Direction, time?: number): void {
+    const t = Number.isFinite(time) ? (time as number) : Date.now();
+    if (!symbol || (direction !== 'LONG' && direction !== 'SHORT')) return;
+    this.manualCooldowns.set(`${symbol}:${direction}`, t);
     this.prune(t);
   }
 
@@ -713,6 +743,27 @@ export class CooldownTracker {
     }
   }
 
+  /** Serialize manual-close cooldown state for persistence across restarts. */
+  serializeManualCooldowns(): Array<{ symbol: string; direction: Direction; time: number }> {
+    return [...this.manualCooldowns.entries()].map(([key, time]) => {
+      const symbol = key.slice(0, key.lastIndexOf(':'));
+      const direction = key.slice(key.lastIndexOf(':') + 1) as Direction;
+      return { symbol, direction, time };
+    });
+  }
+
+  /** Restore manual-close cooldown state from serialized data. */
+  deserializeManualCooldowns(
+    data: Array<{ symbol: string; direction: Direction; time: number }>,
+  ): void {
+    if (!Array.isArray(data)) return;
+    for (const item of data) {
+      if (!item.symbol || !item.time) continue;
+      if (item.direction !== 'LONG' && item.direction !== 'SHORT') continue;
+      this.manualCooldowns.set(`${item.symbol}:${item.direction}`, item.time);
+    }
+  }
+
   private observeRegime(regime: MarketRegime, t: number): void {
     if (regime !== this.globalRegime) {
       this.previousRegime = this.globalRegime;
@@ -727,6 +778,9 @@ export class CooldownTracker {
     }
     for (const [key, e] of this.slCooldowns) {
       if (t - e.time > this.config.postSlCooldownMs) this.slCooldowns.delete(key);
+    }
+    for (const [key, time] of this.manualCooldowns) {
+      if (t - time > this.config.manualCloseCooldownMs) this.manualCooldowns.delete(key);
     }
   }
 }

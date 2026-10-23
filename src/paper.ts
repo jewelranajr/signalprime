@@ -110,12 +110,17 @@ export class PaperTrader {
     if (!signal.entry || !signal.stop_loss || !signal.take_profit || !signal.position) {
       return { id: null, reason: 'rejected: incomplete trade plan (entry/SL/TP/position)' };
     }
-    if (signal.entry.type === 'WAIT_FOR_RETEST') {
-      // The chase guard said "do not chase; wait for a retest". Filling
-      // immediately at entry.preferred (the untouched zone level) would be a
-      // phantom fill — the paper trader cannot simulate waiting for price to
-      // touch the zone, so it must not open here at all.
-      return { id: null, reason: 'rejected: WAIT_FOR_RETEST entry zone not yet touched (no chase fills)' };
+    // R2 (P0 data integrity): LIMIT and RETEST entries name a price level away
+    // from the current market that price has not visited. Filling immediately
+    // at entry.preferred would be a phantom fill at an unvisited price — the
+    // paper trader cannot simulate waiting for price to touch the level, so it
+    // must not open here at all. MARKET/BREAKOUT fill at the tradable price.
+    if (
+      signal.entry.type === 'WAIT_FOR_RETEST' ||
+      signal.entry.type === 'LIMIT' ||
+      signal.entry.type === 'RETEST'
+    ) {
+      return { id: null, reason: `rejected: ${signal.entry.type} entry level not yet touched (no phantom fills)` };
     }
     for (const p of this.positions.values()) {
       if (p.symbol === signal.symbol) {
@@ -181,8 +186,18 @@ export class PaperTrader {
    * partial closes.
    */
   onCandle(symbol: string, candle: PaperCandle): void {
+    // R1 (P0 data integrity): a candle that ended at or before a position opened
+    // cannot have touched that position's SL/TP. Without this guard, replaying
+    // historical candles (e.g. the runner's 24h 15m settlement window) stops
+    // fresh positions on stale wicks — observed live: DOGEUSDT SHORT exited
+    // 23.5h BEFORE it opened. closeTime falls back to openTime when absent.
+    const candleEnd =
+      typeof candle.closeTime === 'number' && Number.isFinite(candle.closeTime)
+        ? candle.closeTime
+        : candle.openTime;
     for (const [id, pos] of [...this.positions]) {
       if (pos.symbol !== symbol) continue;
+      if (candleEnd <= pos.openedAt) continue;
       const st = this.states.get(id);
       if (!st) continue;
       st.lastPrice = candle.close;
@@ -258,9 +273,9 @@ export class PaperTrader {
   }
 
   /**
-   * Close `qty` of a position at `price`, applying the exit fee. When the
-   * position is fully closed, emits one aggregated BacktestTrade into the
-   * trade history with the final leg's exit reason.
+   * Close `qty` of a position at `price`, applying adverse exit slippage and
+   * the exit fee. When the position is fully closed, emits one aggregated
+   * BacktestTrade into the trade history with the final leg's exit reason.
    */
   private closeLeg(
     id: string,
@@ -276,8 +291,15 @@ export class PaperTrader {
     if (!(closeQty > 0)) return;
 
     const sign = pos.direction === 'LONG' ? 1 : -1;
-    const gross = sign * (price - pos.entry) * closeQty;
-    const fee = closeQty * price * (this.config.paperFeePct / 100);
+    // R3 (P0 data integrity): adverse exit slippage. Exits fill worse than the
+    // trigger level — LONG sells lower, SHORT buys higher — mirroring the entry
+    // slippage convention (paperSlippagePct). The fee is computed on the slipped
+    // notional; entry slippage was already applied once at open, so nothing is
+    // double-counted.
+    const slip = this.config.paperSlippagePct / 100;
+    const fillPrice = pos.direction === 'LONG' ? price * (1 - slip) : price * (1 + slip);
+    const gross = sign * (fillPrice - pos.entry) * closeQty;
+    const fee = closeQty * fillPrice * (this.config.paperFeePct / 100);
     const net = gross - fee;
 
     st.remainingQty -= closeQty;

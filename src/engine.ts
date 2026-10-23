@@ -27,6 +27,7 @@ import type {
   ScoreBreakdown,
   ScoreComponent,
   ScorePenalty,
+  PenaltyGroup,
   MTFAnalysis,
   MarketRegime,
   SignalStatus,
@@ -129,6 +130,32 @@ interface ComponentResult {
 
 const PROBABILITY_NOTE =
   'Model-derived estimate based on historical/validated conditions; not a guarantee of outcome.';
+
+/**
+ * Cap on the aggregate liquidity-sweep penalty per direction (correctness fix,
+ * 2026-10-22): the per-event -10 in scoreAll was uncapped, so a genuine rally
+ * that repeatedly sweeps prior swing highs could stack -60..-80 against the
+ * trend side. Individual sweep entries are kept for diagnostics; the sweep
+ * LIST itself is untouched (manipulation veto and regime detection still see
+ * every event).
+ */
+export const SWEEP_PENALTY_CAP = -20;
+
+/** Aggregate ScorePenalties by group name (P2 diagnostics; additive). */
+export function summarizePenalties(penalties: ScorePenalty[]): PenaltyGroup[] {
+  const map = new Map<string, PenaltyGroup>();
+  for (const p of penalties) {
+    const g = map.get(p.name) ?? { name: p.name, long: 0, short: 0 };
+    g.long += p.long;
+    g.short += p.short;
+    map.set(p.name, g);
+  }
+  return [...map.values()].map((g) => ({
+    name: g.name,
+    long: round1(g.long),
+    short: round1(g.short),
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // scoreAll — 9-component weighted scoring, 0..100 per side, causal only
@@ -676,6 +703,35 @@ export function scoreAll(
     }
   }
 
+  // Cap the aggregate sweep penalty per direction (see SWEEP_PENALTY_CAP).
+  // The compensating entry keeps the applied total at the cap while preserving
+  // every individual sweep event for diagnostics.
+  {
+    let sweepLong = 0;
+    let sweepShort = 0;
+    for (const p of penalties) {
+      if (p.name !== 'Liquidity sweep') continue;
+      sweepLong += p.long;
+      sweepShort += p.short;
+    }
+    if (sweepLong < SWEEP_PENALTY_CAP) {
+      penalties.push({
+        name: 'Liquidity sweep cap',
+        long: SWEEP_PENALTY_CAP - sweepLong,
+        short: 0,
+        reason: `Liquidity sweep penalty capped at ${SWEEP_PENALTY_CAP} per direction (uncapped total was ${sweepLong})`,
+      });
+    }
+    if (sweepShort < SWEEP_PENALTY_CAP) {
+      penalties.push({
+        name: 'Liquidity sweep cap',
+        long: 0,
+        short: SWEEP_PENALTY_CAP - sweepShort,
+        reason: `Liquidity sweep penalty capped at ${SWEEP_PENALTY_CAP} per direction (uncapped total was ${sweepShort})`,
+      });
+    }
+  }
+
   // ---- Pump/chase filter (1h for recent move detection) ----
   // If price already pumped 3%+ in last 5x 1h candles, penalize chasing.
   // LONG after a pump = risky entry. SHORT after a dump = risky entry.
@@ -907,6 +963,8 @@ export function noTradeSignal(
     now?: number;
     /** Evaluated scores to carry on NO_TRADE outputs (more informative than zeros). */
     scores?: { long: number; short: number };
+    /** P2 diagnostics: penalty totals by group (additive; default []). */
+    penaltyGroups?: PenaltyGroup[];
     /** V2: price info for levels — engine analyzes entry/SL even for NO_TRADE. */
     priceInfo?: { close: number; atr: number };
     /** Phase 2 WATCH: display-only early-move notice (never executable). */
@@ -977,6 +1035,7 @@ export function noTradeSignal(
     invalidation: [],
     correlation_score: 0,
     ai_rating: opts?.aiRating ?? 'AI_NEUTRAL',
+    penalty_groups: opts?.penaltyGroups ?? [],
     watch: opts?.watch ?? null,
     created_at: new Date(now).toISOString(),
     expires_at: new Date(now + DEFAULT_COOLDOWN_MS).toISOString(),
@@ -1185,6 +1244,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
         ],
         now,
         scores: { long: scores.long, short: scores.short },
+        penaltyGroups: summarizePenalties(scores.penalties),
         priceInfo: { close: lastClose, atr: atrLast },
         watch,
       },
@@ -1221,6 +1281,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       regime,
       warnings: dataIssues,
       now,
+      penaltyGroups: summarizePenalties(scores.penalties),
     });
   }
 
@@ -1238,6 +1299,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
         {
           mtf, regime, warnings: dataIssues, now,
           scores: { long: scores.long, short: scores.short },
+          penaltyGroups: summarizePenalties(scores.penalties),
           priceInfo: { close: lastClose, atr: atrLast },
         },
       );
@@ -1335,6 +1397,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
       warnings: [...scores.penalties.map((p) => p.reason), ...extraWarnings, ...dataIssues],
       now,
       scores: { long: scores.long, short: scores.short },
+      penaltyGroups: summarizePenalties(scores.penalties),
     });
 
   const rrMin = Math.min(rr.tp1, rr.tp2, rr.tp3);
@@ -1510,6 +1573,7 @@ function buildSignalInner(input: SymbolInput, deps: EngineDeps): MasterSignal {
     invalidation,
     correlation_score: 0, // server overlays portfolio correlation
     ai_rating: aiRating,
+    penalty_groups: summarizePenalties(scores.penalties),
     watch: null, // WATCH only marks NO_TRADE signals
     created_at: new Date(now).toISOString(),
     expires_at: new Date(now + config.signalTtlMs).toISOString(),

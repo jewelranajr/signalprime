@@ -29,105 +29,11 @@ import { BinanceDataClient } from '../exchange';
 import { buildSignal } from '../engine';
 import { PaperTrader } from '../paper';
 import { CooldownTracker, buildMarketContext } from '../filters';
+import { applyManualClose, processPaperIntents } from '../paper-intents';
 import type { MasterSignal } from '../types';
 
 const REPORT_PATH = path.join(process.cwd(), 'paper-report.json');
-const INTENTS_PATH = path.join(process.cwd(), 'paper-intents.json');
 const SIGNALS_CACHE_PATH = path.join(process.cwd(), 'signals-cache.json');
-
-/** Intent queued via POST /api/paper/order|close (virtual money only). */
-interface PaperIntent {
-  id: string;
-  type: 'open' | 'close';
-  symbol: string;
-  direction?: 'LONG' | 'SHORT';
-  signal?: MasterSignal;
-  createdAt: string;
-  status: 'pending' | 'done' | 'rejected';
-  note?: string;
-}
-
-/**
- * Execute manual intents queued by the API through the same PaperTrader.
- * Open intents carry the engine signal snapshot; PaperTrader re-validates
- * grade/status/direction before filling. Runs once per cycle.
- *
- * An intent is marked 'done' only AFTER the ledger (paper-report.json) has
- * been saved through `persistLedger`. If the runner crashes before the save,
- * the intent stays 'pending' and is retried on the next cycle — so the app
- * can never show "done" for a close that never persisted (2026-10-12 fix).
- */
-async function processPaperIntents(
-  client: BinanceDataClient,
-  trader: PaperTrader,
-  persistLedger: () => void,
-): Promise<void> {  let intents: PaperIntent[];
-  try {
-    const raw = fs.readFileSync(INTENTS_PATH, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return;
-    intents = parsed as PaperIntent[];
-  } catch {
-    return; // no intent file yet
-  }
-  let changed = false;
-  for (const it of intents) {
-    if (!it || it.status !== 'pending') continue;
-    try {
-      if (it.type === 'open' && it.signal) {
-        const r = trader.openFromSignal(it.signal);
-        if (!r.id) {
-          it.status = 'rejected';
-          it.note = r.reason ?? 'rejected';
-        } else {
-          try {
-            persistLedger(); // save BEFORE marking done (same phantom-done guard as closes)
-          } catch (err) {
-            it.note = `ledger save failed; will retry next cycle (${err instanceof Error ? err.message : err})`;
-            continue; // keep pending
-          }
-          it.status = 'done';
-          it.note = `opened ${r.id}`;
-        }
-        console.log(`  intent ${it.id} (${it.type} ${it.symbol}): ${it.status} — ${it.note}`);
-      } else if (it.type === 'close') {
-        const pos = trader.account.positions.find((p) => p.symbol === it.symbol);
-        if (!pos) {
-          it.status = 'rejected';
-          it.note = 'no open position';
-        } else {
-          const klines = await client.getKlines(it.symbol, '1m', 2);
-          const price = klines.length > 0 ? klines[klines.length - 1].close : 0;
-          if (!(price > 0)) {
-            it.note = 'no market price; will retry next cycle';
-            continue; // keep pending
-          }
-          trader.closePosition(pos.id, price, 'MANUAL');
-          try {
-            persistLedger(); // save BEFORE marking done — a crash before this
-                             // leaves the intent pending so it retries next cycle
-          } catch (err) {
-            it.note = `ledger save failed; will retry next cycle (${err instanceof Error ? err.message : err})`;
-            continue; // keep pending
-          }
-          it.status = 'done';
-          it.note = `closed ${pos.id} @ ${price}`;
-        }
-        console.log(`  intent ${it.id} (${it.type} ${it.symbol}): ${it.status} — ${it.note ?? ''}`);
-      } else {
-        it.status = 'rejected';
-        it.note = 'unknown intent type';
-      }
-    } catch (err) {
-      it.status = 'rejected';
-      it.note = err instanceof Error ? err.message : 'error';
-    }
-    changed = true;
-  }
-  if (changed) {
-    fs.writeFileSync(INTENTS_PATH, JSON.stringify(intents, null, 2));
-  }
-}
 
 function parseArgs(argv: string[]): {
   symbols: string[];
@@ -229,6 +135,7 @@ function printReport(trader: PaperTrader, cycle: number, cooldowns?: CooldownTra
     },
     cooldowns: cooldowns?.serialize() ?? [],
     slCooldowns: cooldowns?.serializeSlCooldowns() ?? [],
+    manualCooldowns: cooldowns?.serializeManualCooldowns() ?? [],
     note: 'Virtual money. Past simulation does not predict future results.',
   };
   fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
@@ -257,7 +164,7 @@ async function main(): Promise<void> {
     try {
       const fs = require('node:fs') as typeof import('node:fs');
       const raw = fs.readFileSync(REPORT_PATH, 'utf8');
-      const data = JSON.parse(raw) as { cooldowns?: Array<{ symbol: string; time: number; direction: 'LONG' | 'SHORT' | 'NO_TRADE'; regime: import('../types').MarketRegime }>; slCooldowns?: Array<{ symbol: string; direction: 'LONG' | 'SHORT'; time: number }> };
+      const data = JSON.parse(raw) as { cooldowns?: Array<{ symbol: string; time: number; direction: 'LONG' | 'SHORT' | 'NO_TRADE'; regime: import('../types').MarketRegime }>; slCooldowns?: Array<{ symbol: string; direction: 'LONG' | 'SHORT'; time: number }>; manualCooldowns?: Array<{ symbol: string; direction: 'LONG' | 'SHORT'; time: number }> };
       if (data.cooldowns) {
         cooldowns.deserialize(data.cooldowns);
         console.log(`restored ${data.cooldowns.length} cooldown records`);
@@ -265,6 +172,10 @@ async function main(): Promise<void> {
       if (data.slCooldowns) {
         cooldowns.deserializeSlCooldowns(data.slCooldowns);
         console.log(`restored ${data.slCooldowns.length} post-SL cooldown records`);
+      }
+      if (data.manualCooldowns) {
+        cooldowns.deserializeManualCooldowns(data.manualCooldowns);
+        console.log(`restored ${data.manualCooldowns.length} manual-close cooldown records`);
       }
     } catch { /* non-fatal */ }
   }
@@ -314,11 +225,15 @@ async function main(): Promise<void> {
   // In-memory only: a restart simply requires the signal to be seen twice
   // again (fail-safe, no stale pending state).
   const pendingConfirmations = new Map<string, { direction: 'LONG' | 'SHORT'; cycle: number }>();
+  // P2 diagnostics: symbols whose signal confirmed and opened this cycle
+  // (pendingConfirmations entry is deleted on open, so track separately).
+  const confirmedThisCycle = new Set<string>();
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
   while (!stop && cycle < cycles) {
     cycle++;
+    confirmedThisCycle.clear(); // P2 diagnostics: per-cycle confirmed opens
 
     // Resolve this cycle's symbol list (rotation for --top / --symbols-file).
     let symbols = fixedSymbols;
@@ -358,7 +273,8 @@ async function main(): Promise<void> {
       // 1b. Manual intents from the mobile/API client (virtual money only).
       // persistLedger saves paper-report.json immediately so an intent is only
       // marked 'done' after the ledger actually reflects it (2026-10-12 fix).
-      await processPaperIntents(client, trader, () => printReport(trader, cycle, cooldowns));
+      await processPaperIntents(client, trader, () => printReport(trader, cycle, cooldowns),
+        (symbol, direction) => applyManualClose(pendingConfirmations, cooldowns, symbol, direction));
 
       // 2+3. Scan symbols, open A+/A/NORMAL signals.
       // Two-phase scan:
@@ -378,6 +294,8 @@ async function main(): Promise<void> {
         symbol: string;
         signal: MasterSignal | null;
         ticker: { quoteVolume: number; priceChangePct: number; lastPrice: number } | undefined;
+        /** P2 diagnostics: last closed primary-tf candle time (data freshness). */
+        candleTime: number | null;
       }
       const analyzed: Analyzed[] = [];
       for (let k = 0; k < symbols.length && !stop; k += poolSize) {
@@ -394,12 +312,22 @@ async function main(): Promise<void> {
                   quoteVolume24h: t?.quoteVolume ?? 0,
                   spreadPct: 0, // spread filter skipped in bulk mode; volume check still applies
                 },
-                { config, market, balance: config.accountBalance, now: Date.now() },
+                // R4 (P0 data integrity): size positions off live paper equity, not the
+                // static config.accountBalance. account.equity is a live getter
+                // (balance + unrealized at last 15m closes); risk compounds on wins
+                // and shrinks on losses instead of staying pinned at $100/trade.
+                { config, market, balance: trader.account.equity, now: Date.now() },
               );
-              return { symbol, signal, ticker: t };
+              // P2 diagnostics: last closed candle time (4h primary, 1h fallback).
+              const tfCandles =
+                candles['4h'] && candles['4h'].length > 0 ? candles['4h'] : candles['1h'] ?? [];
+              const lastCandle = tfCandles.length > 0 ? tfCandles[tfCandles.length - 1] : null;
+              const candleTime =
+                lastCandle && Number.isFinite(lastCandle.closeTime) ? lastCandle.closeTime : null;
+              return { symbol, signal, ticker: t, candleTime };
             } catch (err) {
               console.log(`${symbol}: analysis failed (${err instanceof Error ? err.message : err})`);
-              return { symbol, signal: null, ticker: undefined };
+              return { symbol, signal: null, ticker: undefined, candleTime: null };
             }
           }),
         );
@@ -489,6 +417,7 @@ async function main(): Promise<void> {
         const opened = trader.openFromSignal(signal);
         if (opened.id) {
           cooldowns.record(signal);
+          confirmedThisCycle.add(symbol); // P2 diagnostics: confirmed+opened this cycle
           console.log(`  OPENED virtual ${signal.direction} ${symbol} (id=${opened.id})`);
         } else {
           console.log(`  not opened: ${opened.reason}`);
@@ -522,6 +451,12 @@ async function main(): Promise<void> {
       const diagnostics = analyzed.map((a) => {
         const s = a.signal;
         if (!s) return { symbol: a.symbol, ok: false, error: 'fetch/analysis failed' };
+        // P2 diagnostics: confirmation state for this cycle.
+        const confirmation = confirmedThisCycle.has(a.symbol)
+          ? 'confirmed-opened'
+          : pendingConfirmations.has(a.symbol)
+            ? 'awaiting-confirmation'
+            : null;
         return {
           symbol: a.symbol,
           ok: true,
@@ -533,6 +468,12 @@ async function main(): Promise<void> {
           regime: s.market_regime,
           watch: !!s.watch,
           gate: s.direction === 'NO_TRADE' ? gateBucket(s.reasons[0] ?? 'unknown') : 'passed',
+          // P2: rejection-stage detail (additive; default /api/signals shape unchanged).
+          rejection: s.direction === 'NO_TRADE' ? (s.reasons[0] ?? 'unknown') : null,
+          confidence: s.confidence,
+          penalty_groups: s.penalty_groups ?? [],
+          confirmation,
+          candle_time: a.candleTime,
         };
       });
           const tmpPath = SIGNALS_CACHE_PATH + '.tmp';

@@ -211,6 +211,13 @@ export interface ScorePenalty {
   reason: string;
 }
 
+/** Penalty totals aggregated by group name (P2 diagnostics; additive). */
+export interface PenaltyGroup {
+  name: string;
+  long: number;
+  short: number;
+}
+
 export interface ScoreBreakdown {
   long: number; // 0..100
   short: number; // 0..100
@@ -250,6 +257,13 @@ export interface EngineConfig {
   // Post-stop-loss cooldown: after an SL exit, the same symbol+direction
   // cannot be re-entered for this long (breaks re-entry loops).
   postSlCooldownMs: number;
+  /**
+   * Manual-close cooldown: after the user explicitly closes a paper position,
+   * the runner blocks re-entering the same symbol+direction for this long.
+   * Prevents an immediate re-entry loop when the signal is still ACTIVE.
+   * Default 3_600_000 (60 min); env MANUAL_CLOSE_COOLDOWN_MS.
+   */
+  manualCloseCooldownMs: number;
   // Liquidity filter
   maxSpreadPct: number;
   minQuoteVolume24h: number;
@@ -402,6 +416,14 @@ export interface MasterSignal {
   invalidation: string[];
   correlation_score: number; // 0..100 portfolio correlation exposure
   ai_rating: AIRating;
+  /**
+   * P2 diagnostics (additive): contradiction penalties aggregated by group
+   * name, e.g. [{ name: 'Liquidity sweep', long: -20, short: 0 }]. Present on
+   * every signal; empty when no penalties fired. Powers ?diag=1 rejection
+   * detail; the default /api/signals response shape is otherwise unchanged.
+   * Optional so historical fixtures and experiment harnesses keep compiling.
+   */
+  penalty_groups?: PenaltyGroup[];
   /**
    * Phase 2 WATCH (display-only): set only on NO_TRADE signals that show a
    * developing-move signature (>=2 early-move triggers) but fail entry gates.

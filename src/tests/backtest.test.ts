@@ -134,13 +134,15 @@ describe('paper trading', () => {
     assert.ok(id);
     const sl = sig.stop_loss!.price;
     const entry = sig.entry!.preferred;
-    // A candle that smashes through the stop.
+    // A candle that smashes through the stop. Time-coherent for the R1
+    // settlement guard: the 15m bar closes after the position opened.
     pt.onCandle('BTCUSDT', {
       openTime: now,
       open: entry,
       high: entry * 1.001,
       low: sl * 0.99,
       close: sl * 0.995,
+      closeTime: now + 15 * 60 * 1000 - 1,
     });
     assert.equal(pt.account.positions.length, 0, 'position closed on SL');
     assert.equal(pt.account.tradeHistory.length, 1);
