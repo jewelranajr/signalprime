@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp, buildHonestLiveStats, isValidSymbol } from '../server';
-import type { BacktestTrade } from '../types';
+import type { BacktestTrade, Candle } from '../types';
 import { BinanceDataClient } from '../exchange';
 import { CooldownTracker } from '../filters';
 import { loadConfig } from '../config';
@@ -212,5 +212,45 @@ describe('server', () => {
       if (backup !== null) fs.writeFileSync(cachePath, backup);
       else if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
     }
+  });
+
+  it('/api/timemachine simulates a setup over stubbed klines', async () => {
+    const H4 = 4 * 3_600_000;
+    const T0 = 1_700_000_000_000;
+    const klines: Candle[] = [];
+    let price = 100;
+    for (let i = 0; i < 40; i++) {
+      const open = price;
+      const close = price * 1.01;
+      klines.push({
+        openTime: T0 + i * H4, open, high: close * 1.002, low: open * 0.998,
+        close, volume: 1000, closeTime: T0 + (i + 1) * H4 - 1,
+      });
+      price = close;
+    }
+    const deps = testDeps();
+    (deps as { client: unknown }).client = {
+      getKlines: async () => klines,
+    } as unknown as BinanceDataClient;
+    const app = await buildApp(deps);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/timemachine?symbol=BTCUSDT&direction=LONG&slPct=2&tp1Pct=2&tp2Pct=4&tp3Pct=6',
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as {
+      n: number; winRate: number; verdict: string; paperOnly: boolean;
+    };
+    // 40 klines minus the dropped incomplete last candle = 39 closed, 38 entries.
+    assert.equal(body.n, 38);
+    assert.equal(body.winRate, 1);
+    assert.equal(body.verdict, 'PASSES_HISTORICAL_GATE');
+    assert.equal(body.paperOnly, true);
+    const bad = await app.inject({
+      method: 'GET',
+      url: '/api/timemachine?symbol=BTCUSDT&direction=SIDEWAYS&slPct=2&tp1Pct=2&tp2Pct=4&tp3Pct=6',
+    });
+    await app.close();
+    assert.equal(bad.statusCode, 400);
   });
 });

@@ -411,6 +411,34 @@ export class PaperTrader {
 }
 
 /**
+ * Seed-freshness guard for startup hydration. A paper-report.json bundled
+ * into a container image (e.g. a snapshot pushed alongside a deploy so open
+ * positions survive the redeploy) must only restore state while it is
+ * fresh: hydrating a days-old seed would resurrect positions that have
+ * since closed and double-report their exits. Reports without a parseable
+ * generatedAt are treated as stale. The runner's own runtime report is
+ * rewritten every cycle, so it always passes this check.
+ */
+export const SEED_MAX_AGE_MS = 24 * 3_600_000;
+
+export function isFreshSeedReport(reportPath: string, nowMs: number = Date.now()): boolean {
+  try {
+    const fs = require('node:fs') as typeof import('node:fs');
+    if (!fs.existsSync(reportPath)) return false;
+    const data = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as {
+      generatedAt?: unknown;
+    };
+    if (typeof data.generatedAt !== 'string') return false;
+    const t = Date.parse(data.generatedAt);
+    if (!Number.isFinite(t)) return false;
+    const age = nowMs - t;
+    return age >= 0 && age <= SEED_MAX_AGE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Live-readiness gate for backtest results. Paper validation is required
  * before any live trading, and this codebase performs NO live order
  * placement at all.

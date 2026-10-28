@@ -27,7 +27,7 @@ import * as path from 'node:path';
 import { loadConfig } from '../config';
 import { BinanceDataClient } from '../exchange';
 import { buildSignal } from '../engine';
-import { PaperTrader } from '../paper';
+import { PaperTrader, isFreshSeedReport } from '../paper';
 import { CooldownTracker, buildMarketContext } from '../filters';
 import { applyManualClose, processPaperIntents } from '../paper-intents';
 import type { MasterSignal } from '../types';
@@ -156,7 +156,14 @@ async function main(): Promise<void> {
   const trader = new PaperTrader(config);
 
   // Restore previous session state so Render restarts don't wipe the ledger.
-  const hydrated = trader.hydrateFromReport(REPORT_PATH);
+  // A repo-bundled seed older than 24h is ignored: hydrating it would
+  // resurrect positions that have since closed. The runner's own runtime
+  // report is rewritten every cycle, so it always passes this check.
+  const seedFresh = isFreshSeedReport(REPORT_PATH);
+  if (fs.existsSync(REPORT_PATH) && !seedFresh) {
+    console.log('ignoring stale paper-report seed (generatedAt older than 24h)');
+  }
+  const hydrated = seedFresh ? trader.hydrateFromReport(REPORT_PATH) : false;
   if (!hydrated) {
     console.log('no previous paper state found; starting fresh.');
   } else {

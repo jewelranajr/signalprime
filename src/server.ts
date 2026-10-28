@@ -18,7 +18,9 @@ import { detectRegime } from './regime';
 import { computeIndicators } from './indicators';
 import type { BinanceDataClient } from './exchange';
 import type { CooldownTracker } from './filters';
-import type { BacktestTrade, EngineConfig, MarketContext, MasterSignal, SignalGrade, SymbolInput } from './types';
+import { TIMEFRAMES } from './types';
+import type { BacktestTrade, EngineConfig, MarketContext, MasterSignal, SignalGrade, SymbolInput, Timeframe } from './types';
+import { simulateSetupHistory } from './timemachine';
 
 export interface ServerDeps {
   client: BinanceDataClient;
@@ -525,6 +527,116 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
       live: buildHonestLiveStats(trades, deps.config.paperStartBalance),
       backtests: BACKTEST_SUMMARY,
     };
+  });
+
+  // ---------------------------------------------------------------- time machine
+  // Simulate a trade setup over historical candles BEFORE risking money.
+  // Read-only: runs its own PaperTrader over fetched klines and never
+  // touches the live paper ledger, open positions, or any exchange order.
+  app.get('/api/timemachine', async (req, reply) => {
+    const q = req.query as {
+      symbol?: string;
+      direction?: string;
+      slPct?: string;
+      tp1Pct?: string;
+      tp2Pct?: string;
+      tp3Pct?: string;
+      timeframe?: string;
+      limit?: string;
+      riskUsd?: string;
+      maxHoldBars?: string;
+      stepBars?: string;
+    };
+    const bad = (msg: string) => {
+      reply.code(400);
+      return { error: msg };
+    };
+    const symbol = (q.symbol ?? '').toUpperCase();
+    if (!isValidSymbol(symbol)) {
+      return bad('Invalid symbol. Expected format like BTCUSDT (2-20 uppercase A-Z0-9 chars, must end with USDT).');
+    }
+    const direction = (q.direction ?? '').toUpperCase();
+    if (direction !== 'LONG' && direction !== 'SHORT') {
+      return bad('Invalid direction. Expected LONG or SHORT.');
+    }
+    const timeframe = (q.timeframe ?? '4h') as Timeframe;
+    if (!(TIMEFRAMES as string[]).includes(timeframe)) {
+      return bad(`Invalid timeframe. Expected one of ${TIMEFRAMES.join(', ')}.`);
+    }
+    const parseNum = (v: string | undefined, fallback: number): number =>
+      v === undefined ? fallback : Number(v);
+    const slPct = parseNum(q.slPct, NaN);
+    const tp1Pct = parseNum(q.tp1Pct, NaN);
+    const tp2Pct = parseNum(q.tp2Pct, NaN);
+    const tp3Pct = parseNum(q.tp3Pct, NaN);
+    if ([slPct, tp1Pct, tp2Pct, tp3Pct].some((v) => !Number.isFinite(v))) {
+      return bad('slPct, tp1Pct, tp2Pct and tp3Pct are required numbers.');
+    }
+    const limitRaw = parseNum(q.limit, 500);
+    const limit = Math.floor(limitRaw);
+    if (!Number.isFinite(limitRaw) || limit < 50 || limit > 1000) {
+      return bad('limit must be an integer between 50 and 1000.');
+    }
+    const riskUsd = parseNum(q.riskUsd, 100);
+    if (!Number.isFinite(riskUsd) || riskUsd <= 0) {
+      return bad('riskUsd must be > 0.');
+    }
+    const maxHoldBars = Math.floor(parseNum(q.maxHoldBars, 72));
+    if (!Number.isFinite(maxHoldBars) || maxHoldBars < 1 || maxHoldBars > 500) {
+      return bad('maxHoldBars must be an integer between 1 and 500.');
+    }
+    const stepBars = Math.floor(parseNum(q.stepBars, 1));
+    if (!Number.isFinite(stepBars) || stepBars < 1 || stepBars > 50) {
+      return bad('stepBars must be an integer between 1 and 50.');
+    }
+    try {
+      const klines = await deps.client.getKlines(symbol, timeframe, limit);
+      // Drop the newest candle: it may still be forming.
+      const closed = klines.length > 0 ? klines.slice(0, -1) : [];
+      const result = simulateSetupHistory(
+        closed.map((c) => ({
+          openTime: c.openTime,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          closeTime: c.closeTime,
+        })),
+        { symbol, direction, slPct, tp1Pct, tp2Pct, tp3Pct },
+        deps.config,
+        { riskPerTradeUsd: riskUsd, maxHoldBars, stepBars },
+      );
+      return {
+        symbol,
+        direction,
+        timeframe,
+        paperOnly: true,
+        candlesUsed: result.candlesUsed,
+        entriesEvaluated: result.entriesEvaluated,
+        n: result.n,
+        winRate: result.winRate,
+        lossRate: result.lossRate,
+        profitFactor: result.profitFactor,
+        expectancy: result.expectancy,
+        netPnl: result.netPnl,
+        totalFees: result.totalFees,
+        avgWin: result.avgWin,
+        avgLoss: result.avgLoss,
+        best: result.best,
+        worst: result.worst,
+        maxDrawdownPct: result.maxDrawdownPct,
+        maxConsecutiveLosses: result.maxConsecutiveLosses,
+        verdict: result.verdict,
+        verdictReasons: result.verdictReasons,
+        notes: result.notes,
+      };
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Time Machine:')) {
+        return bad(err.message);
+      }
+      // 200: one bad symbol never crashes the server.
+      return { symbol, error: `Internal error: ${safeMessage(err)}` };
+    }
   });
 
   // ---------------------------------------------------------------- paper intents

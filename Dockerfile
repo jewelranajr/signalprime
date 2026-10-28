@@ -9,6 +9,10 @@ RUN npm ci || npm install
 COPY tsconfig.json ./
 COPY src ./src
 COPY top300.json ./
+# Paper seed: a paper-report.json pushed with a deploy lets the runner
+# hydrate open positions after the redeploy instead of starting fresh.
+# (Freshness-guarded at startup: seeds older than 24h are ignored.)
+COPY paper-report.json ./
 RUN npm run build
 
 # Runtime env
