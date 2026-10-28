@@ -29,11 +29,13 @@ import { BinanceDataClient } from '../exchange';
 import { buildSignal } from '../engine';
 import { PaperTrader, isFreshSeedReport } from '../paper';
 import { CooldownTracker, buildMarketContext } from '../filters';
+import { refreshNewsCache } from '../news';
 import { applyManualClose, processPaperIntents } from '../paper-intents';
 import type { MasterSignal } from '../types';
 
 const REPORT_PATH = path.join(process.cwd(), 'paper-report.json');
 const SIGNALS_CACHE_PATH = path.join(process.cwd(), 'signals-cache.json');
+const NEWS_CACHE_PATH = path.join(process.cwd(), 'news-cache.json');
 
 function parseArgs(argv: string[]): {
   symbols: string[];
@@ -517,6 +519,13 @@ async function main(): Promise<void> {
 
       // 5. Report.
       printReport(trader, cycle, cooldowns);
+
+      // 6. News (best-effort, never breaks the cycle: a failed fetch keeps
+      // the previous news cache, and refreshNewsCache never throws).
+      try {
+        const news = await refreshNewsCache(NEWS_CACHE_PATH);
+        if (news) console.log(`  news -> ${NEWS_CACHE_PATH} (${news.count} items)`);
+      } catch { /* non-fatal: keep previous news cache */ }
     } catch (err) {
       console.error(`cycle #${cycle} error: ${err instanceof Error ? err.message : err}`);
     }

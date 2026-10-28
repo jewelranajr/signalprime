@@ -1,1 +1,86 @@
-{"account":{"balance":9593.986538613673,"equity":9667.52745520393,"openPositions":[{"direction":"SHORT","entry":0.25974803999999996,"fees":0.922583312641004,"id":"KAITOUSDT-1792811442262-1","leverage":2,"openedAt":1792811442262,"quantity":7103.678723743241,"stopLoss":0.2738252532142971,"symbol":"KAITOUSDT","takeProfits":[0.23876212017855425,0.2247368669642571,0.20369898714281137]},{"direction":"SHORT","entry":0.61417714,"fees":0.4948684621261171,"id":"VIRTUALUSDT-1792854828275-2","leverage":2,"openedAt":1792854828275,"quantity":1611.4844721381753,"stopLoss":0.6766060741393809,"symbol":"VIRTUALUSDT","takeProfits":[0.549,0.5344,0.3650757034424762]},{"direction":"SHORT","entry":0.02704459,"fees":0.5148217900835929,"id":"FLOWUSDT-1792869961870-3","leverage":2,"openedAt":1792869961870,"quantity":38072.0720915786,"stopLoss":0.029679114916940336,"symbol":"FLOWUSDT","takeProfits":[0.0231063276245895,0.020477212707649163,0.016533540332238663]}],"realizedPnl":-316.1168270512876,"totalFees":177.79322667267326,"totalFunding":92.6833696303353,"tradeHistory":[{"direction":"LONG","entry":1.00130022,"entryTime":1793029605070,"exitReason":"SL","exitTime":1793181599999,"fees":263.82531387800464,"grade":"NORMAL","pnlPct":-0.22700226288502237,"pnlQuote":-399.36217896131654,"rrRealized":-3.978852487554993,"stopLoss":1.0007289562588129,"symbol":"USDEUSDT","takeProfits":[1.0349,1.0349927609352967,1.0350855218705934]}]},"cycle":456,"generatedAt":"2026-10-28T16:42:59.677Z","note":"Virtual money. Past simulation does not predict future results."}
+{
+  "generatedAt": "2026-10-28T17:52:38.013Z",
+  "cycle": 4,
+  "account": {
+    "balance": 9593.986538613673,
+    "equity": 9652.448382184803,
+    "realizedPnl": -316.1168270512876,
+    "totalFees": 177.79322667267326,
+    "totalFunding": 92.6833696303353,
+    "openPositions": [
+      {
+        "direction": "SHORT",
+        "entry": 0.25974803999999996,
+        "fees": 0.922583312641004,
+        "id": "KAITOUSDT-1792811442262-1",
+        "leverage": 2,
+        "openedAt": 1792811442262,
+        "quantity": 7103.678723743241,
+        "stopLoss": 0.2738252532142971,
+        "symbol": "KAITOUSDT",
+        "takeProfits": [
+          0.23876212017855425,
+          0.2247368669642571,
+          0.20369898714281137
+        ]
+      },
+      {
+        "direction": "SHORT",
+        "entry": 0.61417714,
+        "fees": 0.4948684621261171,
+        "id": "VIRTUALUSDT-1792854828275-2",
+        "leverage": 2,
+        "openedAt": 1792854828275,
+        "quantity": 1611.4844721381753,
+        "stopLoss": 0.6766060741393809,
+        "symbol": "VIRTUALUSDT",
+        "takeProfits": [
+          0.549,
+          0.5344,
+          0.3650757034424762
+        ]
+      },
+      {
+        "direction": "SHORT",
+        "entry": 0.02704459,
+        "fees": 0.5148217900835929,
+        "id": "FLOWUSDT-1792869961870-3",
+        "leverage": 2,
+        "openedAt": 1792869961870,
+        "quantity": 38072.0720915786,
+        "stopLoss": 0.029679114916940336,
+        "symbol": "FLOWUSDT",
+        "takeProfits": [
+          0.0231063276245895,
+          0.020477212707649163,
+          0.016533540332238663
+        ]
+      }
+    ],
+    "tradeHistory": [
+      {
+        "direction": "LONG",
+        "entry": 1.00130022,
+        "entryTime": 1793029605070,
+        "exitReason": "SL",
+        "exitTime": 1793181599999,
+        "fees": 263.82531387800464,
+        "grade": "NORMAL",
+        "pnlPct": -0.22700226288502237,
+        "pnlQuote": -399.36217896131654,
+        "rrRealized": -3.978852487554993,
+        "stopLoss": 1.0007289562588129,
+        "symbol": "USDEUSDT",
+        "takeProfits": [
+          1.0349,
+          1.0349927609352967,
+          1.0350855218705934
+        ]
+      }
+    ]
+  },
+  "cooldowns": [],
+  "slCooldowns": [],
+  "manualCooldowns": [],
+  "note": "Virtual money. Past simulation does not predict future results."
+}

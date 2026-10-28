@@ -462,6 +462,27 @@ export async function buildApp(deps: ServerDeps): Promise<FastifyInstance> {
     }
   });
 
+  // ---------------------------------------------------------------- news
+  // News cache: news-cache.json written by paper-run.js every cycle.
+  // Best-effort: a missing or stale cache returns an empty list, never an
+  // error — the app shows an empty state until the next cycle refreshes it.
+  const NEWS_FILE = path.join(process.cwd(), 'news-cache.json');
+
+  app.get('/api/news', async () => {
+    try {
+      const raw = fs.readFileSync(NEWS_FILE, 'utf8');
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.items)) {
+        return {
+          items: cached.items,
+          updatedAt: cached.generatedAt ?? null,
+          count: cached.items.length,
+        };
+      }
+    } catch { /* fall through to empty */ }
+    return { items: [], updatedAt: null, count: 0 };
+  });
+
   // ---------------------------------------------------------------- market overview
   app.get('/api/market/:symbol', async (req, reply) => {
     const raw = (req.params as { symbol?: string }).symbol ?? '';

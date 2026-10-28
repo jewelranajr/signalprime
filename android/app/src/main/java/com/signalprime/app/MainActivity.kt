@@ -242,6 +242,117 @@ class MainActivity : AppCompatActivity() {
         paperCard.addView(paperBox)
         paperRefresh.setOnClickListener { loadPaper() }
         root.addView(paperCard)
+        root.addView(spacer(14))
+
+        // ---- time machine card ----
+        val tmCard = card()
+        tmCard.addView(section("TIME MACHINE"))
+        tmCard.addView(spacer(4))
+        tmCard.addView(line(
+            "Simulate a setup over history BEFORE risking money. Same execution as paper trading (fees, slippage, funding).",
+            MUTED, 12f
+        ))
+        tmCard.addView(spacer(10))
+        tmCard.addView(line("Symbol", MUTED, 12f))
+        tmCard.addView(spacer(4))
+        tmSymbolInput = EditText(this).apply {
+            hint = "BTCUSDT"
+            setText("BTCUSDT")
+            setTextColor(Color.parseColor(WHITE))
+            setHintTextColor(Color.parseColor("#5b6577"))
+            background = rounded("#0e1420", 10, CARD_BORDER)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            textSize = 14f
+        }
+        tmCard.addView(tmSymbolInput)
+        tmCard.addView(spacer(10))
+        // Direction toggle (green LONG / red SHORT when selected)
+        val tmDirRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        tmLongBtn = styledButton("LONG", outlined = false).apply {
+            background = roundedPressed(GREEN, 10)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, dp(6), 0)
+            }
+            setOnClickListener { setTmDirection("LONG") }
+        }
+        tmShortBtn = styledButton("SHORT", outlined = true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(6), 0, 0, 0)
+            }
+            setOnClickListener { setTmDirection("SHORT") }
+        }
+        tmDirRow.addView(tmLongBtn)
+        tmDirRow.addView(tmShortBtn)
+        tmCard.addView(tmDirRow)
+        tmCard.addView(spacer(10))
+        // Timeframe toggle (engine primary is 4h)
+        val tmTfRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        tmTf1hBtn = styledButton("1h", outlined = true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(0, 0, dp(6), 0)
+            }
+            setOnClickListener { setTmTimeframe("1h") }
+        }
+        tmTf4hBtn = styledButton("4h", outlined = false).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(6), 0, 0, 0)
+            }
+            setOnClickListener { setTmTimeframe("4h") }
+        }
+        tmTfRow.addView(tmTf1hBtn)
+        tmTfRow.addView(tmTf4hBtn)
+        tmCard.addView(tmTfRow)
+        tmCard.addView(spacer(10))
+        // SL / TP percents in one row
+        tmCard.addView(line("SL%  /  TP1%  /  TP2%  /  TP3%", MUTED, 12f))
+        tmCard.addView(spacer(4))
+        val tmPctRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        tmSlInput = pctInput("2")
+        tmTp1Input = pctInput("2")
+        tmTp2Input = pctInput("4")
+        tmTp3Input = pctInput("6")
+        val pctFields = listOf(tmSlInput, tmTp1Input, tmTp2Input, tmTp3Input)
+        for ((idx, field) in pctFields.withIndex()) {
+            field.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (idx > 0) setMargins(dp(6), 0, 0, 0)
+            }
+            tmPctRow.addView(field)
+        }
+        tmCard.addView(tmPctRow)
+        tmCard.addView(spacer(12))
+        val tmRunBtn = styledButton("▶  SIMULATE")
+        tmRunBtn.setOnClickListener { runTimemachine() }
+        tmCard.addView(tmRunBtn)
+        tmCard.addView(spacer(10))
+        tmResultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tmCard.addView(tmResultBox)
+        root.addView(tmCard)
+        root.addView(spacer(14))
+
+        // ---- news card ----
+        val newsCard = card()
+        newsCard.addView(section("NEWS"))
+        newsCard.addView(spacer(4))
+        newsCard.addView(line(
+            "Crypto headlines — context only, not signals.",
+            MUTED, 12f
+        ))
+        newsCard.addView(spacer(10))
+        val newsRefreshBtn = styledButton("↻  REFRESH NEWS", outlined = true)
+        newsRefreshBtn.setOnClickListener { loadNews() }
+        newsCard.addView(newsRefreshBtn)
+        newsCard.addView(spacer(10))
+        newsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        newsCard.addView(newsBox)
+        root.addView(newsCard)
 
         root.addView(spacer(18))
         root.addView(TextView(this).apply {
@@ -258,17 +369,42 @@ class MainActivity : AppCompatActivity() {
     // ---------- UI helpers ----------
 
     private var signalMode = "STRICT" // STRICT or NORMAL
+    // Generation counter for loadPaper(): every call bumps it; async
+    // callbacks must verify their generation is still current before
+    // touching paperBox, otherwise overlapping refreshes append duplicates.
+    private var paperLoadGen = 0
     private lateinit var modeStrictBtn: Button
     private lateinit var modeNormalBtn: Button
     private lateinit var winRateText: TextView
     private lateinit var winRateNormalText: TextView
     private lateinit var winRateGoodText: TextView
     private lateinit var signalsMetaText: TextView
+    // Time Machine UI state
+    private lateinit var tmSymbolInput: EditText
+    private lateinit var tmSlInput: EditText
+    private lateinit var tmTp1Input: EditText
+    private lateinit var tmTp2Input: EditText
+    private lateinit var tmTp3Input: EditText
+    private lateinit var tmLongBtn: Button
+    private lateinit var tmShortBtn: Button
+    private lateinit var tmTf1hBtn: Button
+    private lateinit var tmTf4hBtn: Button
+    private lateinit var tmResultBox: LinearLayout
+    private var tmDirection = "LONG"
+    private var tmTimeframe = "4h"
+    private var tmRunning = false
+    // News UI state (tickers with recent headlines, for signal tags)
+    private lateinit var newsBox: LinearLayout
+    private var newsSymbols = setOf<String>()
+    private var newsLoaded = false
     // Auto-refresh: 5-min interval while the activity is in the foreground.
     // Started in onResume, stopped in onPause — no leaks, no background drain.
     private val refreshHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val autoRefreshRunnable = Runnable {
-        if (ApiClient.baseUrl.isNotEmpty()) loadSignals()
+        if (ApiClient.baseUrl.isNotEmpty()) {
+            loadSignals()
+            loadNews()
+        }
         scheduleAutoRefresh()
     }
 
@@ -279,7 +415,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (ApiClient.baseUrl.isNotEmpty()) loadSignals()
+        if (ApiClient.baseUrl.isNotEmpty()) {
+            loadSignals()
+            loadNews()
+        }
         scheduleAutoRefresh()
     }
 
@@ -385,6 +524,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 loadSignals()
                 loadPaper()
+                loadNews()
             } catch (e: Exception) {
                 setDot(false)
                 runOnUiThread {
@@ -566,6 +706,14 @@ class MainActivity : AppCompatActivity() {
             val wb = badge("👁 WATCH", "#38bdf8")
             wb.setPadding(dp(10), 0, 0, 0)
             top.addView(wb)
+        }
+        // News tag: coin mentioned in a recent headline (context only,
+        // never a signal or endorsement).
+        val baseSym = s.optString("symbol").removeSuffix("USDT")
+        if (newsSymbols.contains(baseSym)) {
+            val nb = badge("📰 NEWS", "#fbbf24")
+            nb.setPadding(dp(10), 0, 0, 0)
+            top.addView(nb)
         }
         // Age timer in corner
         val age = signalAge(s.optString("created_at", ""))
@@ -911,11 +1059,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadPaper() {
         if (ApiClient.baseUrl.isEmpty()) return
+        val gen = ++paperLoadGen // stale async callbacks from older calls must not touch the UI
         thread {
             try {
                 val res = ApiClient.paperStatus()
                 val validation = try { ApiClient.get("/api/validation") } catch (_: Exception) { null }
                 runOnUiThread {
+                    if (gen != paperLoadGen) return@runOnUiThread // superseded by a newer loadPaper()
                     if (!res.optBoolean("running", false)) {
                         paperSummary.text = "paper runner is not active"
                         paperBox.removeAllViews()
@@ -1057,6 +1207,7 @@ class MainActivity : AppCompatActivity() {
                         thread {
                             val prices = ApiClient.binancePrices(syms)
                             runOnUiThread {
+                                if (gen != paperLoadGen) return@runOnUiThread // stale price fetch; a newer load owns paperBox now
                                 for (i in 0 until positions.length()) {
                                     paperBox.addView(positionRow(positions.getJSONObject(i), prices))
                                 }
@@ -1144,6 +1295,226 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .show()
+    }
+
+    // ---------- time machine ----------
+
+    private fun pctInput(default: String): EditText = EditText(this).apply {
+        setText(default)
+        inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+            android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        setTextColor(Color.parseColor(WHITE))
+        setHintTextColor(Color.parseColor("#5b6577"))
+        background = rounded("#0e1420", 10, CARD_BORDER)
+        setPadding(dp(12), dp(12), dp(12), dp(12))
+        textSize = 14f
+        gravity = Gravity.CENTER
+    }
+
+    private fun setTmDirection(dir: String) {
+        tmDirection = dir
+        if (dir == "LONG") {
+            tmLongBtn.background = roundedPressed(GREEN, 10)
+            tmLongBtn.setTextColor(Color.WHITE)
+            tmShortBtn.background = roundedPressed("#0e1420", 10, ACCENT)
+            tmShortBtn.setTextColor(Color.parseColor(ACCENT))
+        } else {
+            tmShortBtn.background = roundedPressed(RED, 10)
+            tmShortBtn.setTextColor(Color.WHITE)
+            tmLongBtn.background = roundedPressed("#0e1420", 10, ACCENT)
+            tmLongBtn.setTextColor(Color.parseColor(ACCENT))
+        }
+    }
+
+    private fun setTmTimeframe(tf: String) {
+        tmTimeframe = tf
+        if (tf == "1h") {
+            tmTf1hBtn.background = rounded(ACCENT, 10)
+            tmTf1hBtn.setTextColor(Color.WHITE)
+            tmTf4hBtn.background = rounded("#0e1420", 10, ACCENT)
+            tmTf4hBtn.setTextColor(Color.parseColor(ACCENT))
+        } else {
+            tmTf4hBtn.background = rounded(ACCENT, 10)
+            tmTf4hBtn.setTextColor(Color.WHITE)
+            tmTf1hBtn.background = rounded("#0e1420", 10, ACCENT)
+            tmTf1hBtn.setTextColor(Color.parseColor(ACCENT))
+        }
+    }
+
+    private fun runTimemachine() {
+        if (ApiClient.baseUrl.isEmpty()) {
+            toast("Connect to a server first")
+            return
+        }
+        if (tmRunning) return
+        val symbol = tmSymbolInput.text.toString().trim().uppercase()
+        val sl = tmSlInput.text.toString().toDoubleOrNull()
+        val tp1 = tmTp1Input.text.toString().toDoubleOrNull()
+        val tp2 = tmTp2Input.text.toString().toDoubleOrNull()
+        val tp3 = tmTp3Input.text.toString().toDoubleOrNull()
+        if (symbol.isEmpty() || sl == null || tp1 == null || tp2 == null || tp3 == null ||
+            sl <= 0 || tp1 <= 0 || tp2 <= 0 || tp3 <= 0 || !(tp1 <= tp2 && tp2 <= tp3)) {
+            toast("Check inputs: symbol + SL/TP percents > 0, TPs ascending")
+            return
+        }
+        tmRunning = true
+        runOnUiThread {
+            tmResultBox.removeAllViews()
+            tmResultBox.addView(emptyState("Simulating…"))
+        }
+        thread {
+            try {
+                val res = ApiClient.timemachine(symbol, tmDirection, sl, tp1, tp2, tp3, tmTimeframe)
+                runOnUiThread {
+                    tmRunning = false
+                    renderTmResult(symbol, res)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    tmRunning = false
+                    tmResultBox.removeAllViews()
+                    tmResultBox.addView(line("✗ ${e.message}", RED, 13f))
+                }
+                toast("time machine: ${e.message}")
+            }
+        }
+    }
+
+    private fun renderTmResult(symbol: String, res: JSONObject) {
+        tmResultBox.removeAllViews()
+        if (res.has("error")) {
+            tmResultBox.addView(line("✗ ${res.optString("error")}", RED, 13f))
+            return
+        }
+        val card = innerCard()
+        val verdict = res.optString("verdict")
+        val pass = verdict == "PASSES_HISTORICAL_GATE"
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(line("$symbol  $tmDirection  $tmTimeframe", WHITE, 15f, bold = true).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        top.addView(badge(if (pass) "PASS" else "FAIL", if (pass) GREEN else RED))
+        card.addView(top)
+        card.addView(spacer(6))
+        val n = res.optInt("n", 0)
+        val wr = res.optDouble("winRate", 0.0) * 100
+        val pf = res.optDouble("profitFactor", 0.0)
+        val exp = res.optDouble("expectancy", 0.0)
+        val net = res.optDouble("netPnl", 0.0)
+        val dd = res.optDouble("maxDrawdownPct", 0.0)
+        card.addView(line("Trades $n  •  Win ${String.format("%.1f", wr)}%", WHITE, 13f))
+        card.addView(line(
+            "Profit factor ${String.format("%.2f", pf)}  •  Expectancy ${money(exp)}/trade",
+            MUTED, 13f
+        ))
+        card.addView(line(
+            "Net ${money(net)}  •  Max DD ${String.format("%.1f", dd)}%",
+            MUTED, 13f
+        ))
+        val avgWin = res.optDouble("avgWin", 0.0)
+        val avgLoss = res.optDouble("avgLoss", 0.0)
+        val best = res.optDouble("best", 0.0)
+        val worst = res.optDouble("worst", 0.0)
+        val maxConsec = res.optInt("maxConsecutiveLosses", 0)
+        card.addView(line("Avg win ${money(avgWin)}  •  Avg loss ${money(avgLoss)}", MUTED, 12f))
+        card.addView(line(
+            "Best ${money(best)}  •  Worst ${money(worst)}  •  Max $maxConsec losses in a row",
+            MUTED, 12f
+        ))
+        val reasons = res.optJSONArray("verdictReasons")
+        if (reasons != null) {
+            for (i in 0 until reasons.length()) {
+                card.addView(spacer(2))
+                card.addView(line("• ${reasons.optString(i)}", if (pass) GREEN else "#fbbf24", 12f))
+            }
+        }
+        card.addView(spacer(6))
+        card.addView(line(
+            "Historical simulation only — past performance does not predict future results.",
+            "#5b6577", 11f
+        ))
+        tmResultBox.addView(card)
+    }
+
+    private fun money(v: Double): String =
+        if (v < 0) "-\$" + String.format("%.2f", -v) else "\$" + String.format("%.2f", v)
+
+    // ---------- news ----------
+
+    private fun loadNews() {
+        if (ApiClient.baseUrl.isEmpty()) return
+        thread {
+            try {
+                val res = ApiClient.news()
+                val arr = res.optJSONArray("items")
+                val symbols = mutableSetOf<String>()
+                val items = mutableListOf<JSONObject>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val it = arr.getJSONObject(i)
+                        items.add(it)
+                        val syms = it.optJSONArray("symbols")
+                        if (syms != null) {
+                            for (j in 0 until syms.length()) symbols.add(syms.optString(j))
+                        }
+                    }
+                }
+                runOnUiThread {
+                    val changed = symbols != newsSymbols
+                    newsSymbols = symbols
+                    newsLoaded = true
+                    renderNews(items)
+                    // Apply fresh news tags to already-rendered signals.
+                    if (changed && signalsBox.childCount > 0) loadSignals()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!newsLoaded) {
+                        newsBox.removeAllViews()
+                        newsBox.addView(line("✗ ${e.message}", RED, 13f))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun renderNews(items: List<JSONObject>) {
+        newsBox.removeAllViews()
+        if (items.isEmpty()) {
+            newsBox.addView(emptyState("No headlines yet.\nNews refreshes with each 15-min scan cycle."))
+            return
+        }
+        for (it in items.take(10)) {
+            val title = it.optString("title")
+            val link = it.optString("link")
+            val source = it.optString("source")
+            val age = signalAge(it.optString("publishedAt", ""))
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, dp(6))
+            }
+            val titleView = line(title, WHITE, 13f).apply {
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            row.addView(titleView)
+            val meta = if (age.isNotEmpty()) "$source  •  $age" else source
+            row.addView(line(meta, MUTED, 11f))
+            if (link.isNotEmpty()) {
+                row.setOnClickListener {
+                    try {
+                        startActivity(android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(link)
+                        ))
+                    } catch (_: Exception) { }
+                }
+            }
+            newsBox.addView(row)
+        }
     }
 
     private fun fmt(n: Double): String {

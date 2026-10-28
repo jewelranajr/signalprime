@@ -67,6 +67,24 @@ object ApiClient {
     fun paperClose(symbol: String): JSONObject =
         post("/api/paper/close", JSONObject().put("symbol", symbol))
 
+    // ---- Time Machine: simulate a setup over history before risking money ----
+
+    fun timemachine(
+        symbol: String,
+        direction: String,
+        slPct: Double,
+        tp1Pct: Double,
+        tp2Pct: Double,
+        tp3Pct: Double,
+        timeframe: String,
+    ): JSONObject =
+        get("/api/timemachine?symbol=$symbol&direction=$direction&slPct=$slPct" +
+            "&tp1Pct=$tp1Pct&tp2Pct=$tp2Pct&tp3Pct=$tp3Pct&timeframe=$timeframe&limit=500")
+
+    // ---- News: latest crypto headlines matched to coins (best-effort) ----
+
+    fun news(): JSONObject = get("/api/news")
+
     // ---- Binance public price (for per-position unrealized PnL) ----
 
     /**
