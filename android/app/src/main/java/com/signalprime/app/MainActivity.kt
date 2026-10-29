@@ -80,16 +80,16 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(20), dp(16), dp(32))
+            setPadding(dp(16), dp(12), dp(16), dp(32))
             setBackgroundColor(Color.parseColor(BG))
         }
         val scroll = ScrollView(this).apply { addView(root) }
-        setContentView(scroll)
 
         // ---- header ----
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(20), dp(16), dp(12))
         }
         val logo = TextView(this).apply {
             text = "◈"
@@ -110,7 +110,7 @@ class MainActivity : AppCompatActivity() {
         titleBox.addView(TextView(this).apply {
             text = "PAPER TRADING  •  VIRTUAL MONEY"
             textSize = 11f
-            setTextColor(Color.parseColor(GREEN))
+            setTextColor(Color.parseColor(ACCENT))
             setTypeface(typeface, Typeface.BOLD)
         })
         header.addView(titleBox)
@@ -127,8 +127,24 @@ class MainActivity : AppCompatActivity() {
         }
         dotWrap.addView(statusDot)
         header.addView(dotWrap)
-        root.addView(header)
-        root.addView(spacer(18))
+        // Sticky header: title + status stay visible while cards scroll.
+        val headerDivider = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+            )
+            setBackgroundColor(Color.parseColor(CARD_BORDER))
+        }
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor(BG))
+        }
+        scroll.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+        )
+        outer.addView(header)
+        outer.addView(headerDivider)
+        outer.addView(scroll)
+        setContentView(outer)
 
         // ---- server card ----
         val serverCard = card()
@@ -155,7 +171,7 @@ class MainActivity : AppCompatActivity() {
         serverCard.addView(statusText)
         connectBtn.setOnClickListener { connect() }
         root.addView(serverCard)
-        root.addView(spacer(14))
+        root.addView(spacer(16))
 
         // ---- signals card ----
         val sigCard = card()
@@ -222,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         sigCard.addView(signalsBox)
         sigRefresh.setOnClickListener { loadSignals() }
         root.addView(sigCard)
-        root.addView(spacer(14))
+        root.addView(spacer(16))
 
         // ---- paper account card ----
         val paperCard = card()
@@ -242,7 +258,7 @@ class MainActivity : AppCompatActivity() {
         paperCard.addView(paperBox)
         paperRefresh.setOnClickListener { loadPaper() }
         root.addView(paperCard)
-        root.addView(spacer(14))
+        root.addView(spacer(16))
 
         // ---- time machine card ----
         val tmCard = card()
@@ -335,7 +351,7 @@ class MainActivity : AppCompatActivity() {
         tmResultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         tmCard.addView(tmResultBox)
         root.addView(tmCard)
-        root.addView(spacer(14))
+        root.addView(spacer(16))
 
         // ---- news card ----
         val newsCard = card()
@@ -354,7 +370,7 @@ class MainActivity : AppCompatActivity() {
         newsCard.addView(newsBox)
         root.addView(newsCard)
 
-        root.addView(spacer(18))
+        root.addView(spacer(16))
         root.addView(TextView(this).apply {
             text = "Manual orders are engine-gated: only ACTIVE A+/A signals can open.\nPast simulation does not predict future results."
             textSize = 11f
@@ -433,12 +449,25 @@ class MainActivity : AppCompatActivity() {
         setPadding(dp(16), dp(16), dp(16), dp(16))
     }
 
-    private fun section(t: String) = TextView(this).apply {
-        text = t
-        textSize = 12f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(Color.parseColor(ACCENT))
-        letterSpacing = 0.12f
+    private fun section(t: String): LinearLayout {
+        val ctx = this
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(ctx).apply {
+                text = t
+                textSize = 12f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.parseColor(ACCENT))
+                letterSpacing = 0.12f
+            })
+            addView(spacer(6))
+            addView(View(ctx).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                )
+                setBackgroundColor(Color.parseColor(CARD_BORDER))
+            })
+        }
     }
 
     private fun styledButton(t: String, outlined: Boolean = false): Button {
@@ -451,6 +480,7 @@ class MainActivity : AppCompatActivity() {
             background = if (outlined) roundedPressed("#0e1420", 10, ACCENT)
                          else roundedPressed(ACCENT, 10)
             setPadding(dp(12), dp(12), dp(12), dp(12))
+            minimumHeight = dp(48)
             isAllCaps = false
             stateListAnimator = null
             isClickable = true
@@ -694,7 +724,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val sym = line(s.optString("symbol"), WHITE, 17f, bold = true).apply {
+        val sym = line(s.optString("symbol"), WHITE, 18f, bold = true).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         top.addView(sym)
@@ -1494,7 +1524,14 @@ class MainActivity : AppCompatActivity() {
             val age = signalAge(it.optString("publishedAt", ""))
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(6), 0, dp(6))
+                background = roundedPressed("#0e1420", 10)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                val p = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                p.setMargins(0, dp(4), 0, dp(4))
+                layoutParams = p
             }
             val titleView = line(title, WHITE, 13f).apply {
                 maxLines = 2
